@@ -279,7 +279,7 @@ class IngestionPipeline:
 - Consumes: approved decisions from this plan.
 - Produces: written rationale for the dataset source, subset sources, chunk defaults, and evaluation split.
 
-- [ ] **Step 1: Create the decision record**
+- [x] **Step 1: Create the decision record**
 
 Document:
 - Official dataset URL and mirror note.
@@ -416,7 +416,7 @@ git commit -m "chore: initialize python project and test tooling"
 - Consumes: official release URLs and `questions.jsonl`.
 - Produces: `data/raw/slices/*.zip`, `data/raw/questions.jsonl`, document ID inventory, and the split files.
 
-- [ ] **Step 1: Write the failing manifest tests**
+- [x] **Step 1: Write the failing manifest tests**
 
 Test cases:
 
@@ -440,7 +440,7 @@ def test_manifest_never_contains_question_text_as_document() -> None:
     ...
 ```
 
-- [ ] **Step 2: Run the tests to confirm failure**
+- [x] **Step 2: Run the tests to confirm failure**
 
 ```bash
 uv run pytest backend/tests/unit/test_manifest.py -v
@@ -448,7 +448,7 @@ uv run pytest backend/tests/unit/test_manifest.py -v
 
 Expected: FAIL because the manifest module does not exist.
 
-- [ ] **Step 3: Implement `download_subset.py`**
+- [x] **Step 3: Implement `download_subset.py`**
 
 Requirements:
 - Download the approved release slices for the four sources.
@@ -459,7 +459,7 @@ Requirements:
 - Support `--force` and `--dry-run`.
 - Never delete existing files unless `--force` is passed.
 
-- [ ] **Step 4: Implement `build_subset_manifest.py`**
+- [x] **Step 4: Implement `build_subset_manifest.py`**
 
 Requirements:
 - Read the downloaded zips without extracting them.
@@ -471,7 +471,7 @@ Requirements:
 - Fail loudly if a selected question has a missing gold document.
 - Report excluded questions with reasons.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 ```bash
 uv run pytest backend/tests/unit/test_manifest.py -v
@@ -479,7 +479,7 @@ uv run pytest backend/tests/unit/test_manifest.py -v
 
 Expected: PASS.
 
-- [ ] **Step 6: Run the real download and manifest build**
+- [x] **Step 6: Run the real download and manifest build**
 
 ```bash
 uv run python scripts/download_subset.py
@@ -488,9 +488,11 @@ uv run python scripts/build_subset_manifest.py
 
 Expected: ~90 MB downloaded; manifest files created; no missing gold documents.
 
-- [ ] **Step 7: Inspect and record actual counts**
+- [x] **Step 7: Inspect and record actual counts**
 
 Record the actual document count, eligible question count, split counts, and exclusion reasons in the decision record. Do not guess.
+
+Actual: 34,375 unique doc IDs / 34,378 document members; 211 eligible; 169 dev; 42 holdout; 30 abstention; 259 excluded; 0 missing gold documents.
 
 - [ ] **Step 8: Commit**
 
