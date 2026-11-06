@@ -23,6 +23,7 @@ package = false
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
 addopts = "-ra"
+markers = ["integration: tests that require downloaded real data"]
 
 [tool.ruff]
 line-length = 100

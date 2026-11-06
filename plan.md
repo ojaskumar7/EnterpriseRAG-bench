@@ -780,7 +780,7 @@ git commit -m "feat: add token-aware deterministic chunking"
 - Consumes: a `DocumentLoader`, `IngestionConfig`, normalizer, and chunker.
 - Produces: `IngestionResult`, `data/processed/chunks.jsonl`, and `data/processed/stats.json`.
 
-- [ ] **Step 1: Write the failing pipeline tests**
+- [x] **Step 1: Write the failing pipeline tests**
 
 Test cases:
 
@@ -804,7 +804,7 @@ def test_pipeline_does_not_drop_documents_silently() -> None:
     ...
 ```
 
-- [ ] **Step 2: Run the tests to confirm failure**
+- [x] **Step 2: Run the tests to confirm failure**
 
 ```bash
 uv run pytest backend/tests/integration/test_pipeline.py -v
@@ -812,7 +812,7 @@ uv run pytest backend/tests/integration/test_pipeline.py -v
 
 Expected: FAIL because the pipeline does not exist.
 
-- [ ] **Step 3: Implement the pipeline**
+- [x] **Step 3: Implement the pipeline**
 
 Requirements:
 - Iterate documents from the loader.
@@ -826,7 +826,7 @@ Requirements:
 - Support `max_docs` and `source_types` filters for development.
 - Make reruns deterministic.
 
-- [ ] **Step 4: Implement the CLI**
+- [x] **Step 4: Implement the CLI**
 
 `scripts/ingest_subset.py` arguments:
 
@@ -841,7 +841,7 @@ Requirements:
 --max-docs
 ```
 
-- [ ] **Step 5: Run fixture and real-subset tests**
+- [x] **Step 5: Run fixture and real-subset tests**
 
 ```bash
 uv run pytest backend/tests/integration/test_pipeline.py -v
@@ -850,7 +850,7 @@ uv run pytest backend/tests/integration/test_real_subset.py -v -m integration
 
 Mark the real-subset test so it skips cleanly when `data/raw/` is absent.
 
-- [ ] **Step 6: Run the real ingestion**
+- [x] **Step 6: Run the real ingestion**
 
 ```bash
 uv run python scripts/ingest_subset.py --raw-dir data/raw --output-dir data/processed
@@ -858,7 +858,7 @@ uv run python scripts/ingest_subset.py --raw-dir data/raw --output-dir data/proc
 
 Expected: `data/processed/chunks.jsonl` and `data/processed/stats.json` are created.
 
-- [ ] **Step 7: Validate the output**
+- [x] **Step 7: Validate the output**
 
 Check:
 - Every chunk has a valid `doc_id` and `chunk_id`.
@@ -867,7 +867,7 @@ Check:
 - Every processed document produced at least one chunk or was counted as skipped/failed.
 - Rerunning produces identical chunk IDs.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/app/ingestion/pipeline.py backend/app/config.py scripts/ingest_subset.py backend/tests/integration/
