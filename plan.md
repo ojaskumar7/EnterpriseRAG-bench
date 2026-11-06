@@ -520,7 +520,7 @@ git commit -m "feat: add subset download and question manifest pipeline"
 - Consumes: `RawDocument`, `NormalizedDocument`, `Chunk`, `SourceType`, `DocumentLoader`.
 - Produces: iterators over validated `RawDocument` objects.
 
-- [ ] **Step 1: Write the failing model tests**
+- [x] **Step 1: Write the failing model tests**
 
 Test cases:
 
@@ -538,7 +538,7 @@ def test_chunk_serializes_to_json() -> None:
     ...
 ```
 
-- [ ] **Step 2: Write the failing loader tests**
+- [x] **Step 2: Write the failing loader tests**
 
 Test cases:
 
@@ -562,7 +562,7 @@ def test_parquet_loader_rejects_missing_columns() -> None:
     ...
 ```
 
-- [ ] **Step 3: Run the tests to confirm failure**
+- [x] **Step 3: Run the tests to confirm failure**
 
 ```bash
 uv run pytest backend/tests/unit/test_models.py backend/tests/unit/test_zip_loader.py backend/tests/unit/test_parquet_loader.py -v
@@ -570,11 +570,11 @@ uv run pytest backend/tests/unit/test_models.py backend/tests/unit/test_zip_load
 
 Expected: FAIL because the modules do not exist.
 
-- [ ] **Step 4: Implement the models**
+- [x] **Step 4: Implement the models**
 
 Validate `doc_id` with `^dsid_[0-9a-f]{32}$`. Use Pydantic v2. Keep models immutable where practical. Reject unknown source types.
 
-- [ ] **Step 5: Implement the zip loader**
+- [x] **Step 5: Implement the zip loader**
 
 Requirements:
 - Read `.txt` members directly from the zip; do not extract to disk.
@@ -585,7 +585,7 @@ Requirements:
 - Reject absolute paths, `..` traversal, and members that exceed a configured uncompressed size.
 - Skip malformed filenames and record the reason.
 
-- [ ] **Step 6: Implement the parquet loader**
+- [x] **Step 6: Implement the parquet loader**
 
 Requirements:
 - Read the HF parquet schema: `doc_id`, `source_type`, `title`, `content`.
@@ -593,7 +593,7 @@ Requirements:
 - Reject missing columns with a clear error.
 - Skip rows with invalid `doc_id` values and record the reason.
 
-- [ ] **Step 7: Run the tests and lint**
+- [x] **Step 7: Run the tests and lint**
 
 ```bash
 uv run pytest backend/tests/unit/test_models.py backend/tests/unit/test_zip_loader.py backend/tests/unit/test_parquet_loader.py -v
@@ -602,7 +602,7 @@ uv run ruff check .
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/app/ingestion/models.py backend/app/ingestion/loaders/ backend/tests/

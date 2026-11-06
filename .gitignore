@@ -14,5 +14,7 @@ data/raw/
 data/processed/
 *.parquet
 *.zip
+!backend/tests/fixtures/*.parquet
+!backend/tests/fixtures/*.zip
 *.log
 .DS_Store
