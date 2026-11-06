@@ -697,7 +697,7 @@ git commit -m "feat: add deterministic document normalization"
 - Consumes: `NormalizedDocument`, tokenizer name, chunk size, overlap, minimum chunk size.
 - Produces: a deterministic `list[Chunk]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Test cases:
 
@@ -727,7 +727,7 @@ def test_empty_document_produces_no_chunks() -> None:
     ...
 ```
 
-- [ ] **Step 2: Run the tests to confirm failure**
+- [x] **Step 2: Run the tests to confirm failure**
 
 ```bash
 uv run pytest backend/tests/unit/test_chunking.py -v
@@ -735,7 +735,7 @@ uv run pytest backend/tests/unit/test_chunking.py -v
 
 Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: Implement the chunker**
+- [x] **Step 3: Implement the chunker**
 
 Requirements:
 - Load the tokenizer with `AutoTokenizer.from_pretrained(tokenizer_name)`.
@@ -749,7 +749,7 @@ Requirements:
 - Populate `source_type`, `title`, and metadata from the document.
 - Keep the tokenizer instance reusable; do not reload it per document.
 
-- [ ] **Step 4: Run the tests and lint**
+- [x] **Step 4: Run the tests and lint**
 
 ```bash
 uv run pytest backend/tests/unit/test_chunking.py -v
@@ -758,7 +758,7 @@ uv run ruff check .
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/ingestion/chunking/token_chunker.py backend/tests/unit/test_chunking.py
