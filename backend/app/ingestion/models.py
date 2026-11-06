@@ -56,6 +56,7 @@ class NormalizedDocument(DocumentModel):
     raw_content: str
     content_hash: str
     char_count: int
+    is_empty: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

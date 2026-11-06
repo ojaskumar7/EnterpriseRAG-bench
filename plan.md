@@ -621,7 +621,7 @@ git commit -m "feat: add document models and zip/parquet loaders"
 - Consumes: `RawDocument`.
 - Produces: `NormalizedDocument` with deterministic `content` and `content_hash`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Test cases:
 
@@ -648,7 +648,7 @@ def test_empty_document_is_flagged_not_crashed() -> None:
     ...
 ```
 
-- [ ] **Step 2: Run the tests to confirm failure**
+- [x] **Step 2: Run the tests to confirm failure**
 
 ```bash
 uv run pytest backend/tests/unit/test_normalize.py -v
@@ -656,7 +656,7 @@ uv run pytest backend/tests/unit/test_normalize.py -v
 
 Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: Implement normalization**
+- [x] **Step 3: Implement normalization**
 
 Requirements:
 - Unicode NFKC normalization.
@@ -669,7 +669,7 @@ Requirements:
 - Compute SHA256 over the UTF-8 encoded normalized content.
 - Return `NormalizedDocument`.
 
-- [ ] **Step 4: Run the tests and lint**
+- [x] **Step 4: Run the tests and lint**
 
 ```bash
 uv run pytest backend/tests/unit/test_normalize.py -v
@@ -678,7 +678,7 @@ uv run ruff check .
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/ingestion/preprocessing/normalize.py backend/tests/unit/test_normalize.py
