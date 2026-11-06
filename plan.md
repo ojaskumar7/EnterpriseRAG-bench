@@ -494,7 +494,7 @@ Record the actual document count, eligible question count, split counts, and exc
 
 Actual: 34,375 unique doc IDs / 34,378 document members; 211 eligible; 169 dev; 42 holdout; 30 abstention; 259 excluded; 0 missing gold documents.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add scripts/download_subset.py scripts/build_subset_manifest.py backend/tests/unit/test_manifest.py backend/tests/fixtures/questions.jsonl data/sample/
