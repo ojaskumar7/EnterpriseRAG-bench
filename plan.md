@@ -888,7 +888,7 @@ git commit -m "feat: add ingestion pipeline and subset CLI"
 - Consumes: `chunks.jsonl`, `stats.json`, and the subset manifest.
 - Produces: documented ingestion design and real dataset statistics.
 
-- [ ] **Step 1: Generate EDA statistics**
+- [x] **Step 1: Generate EDA statistics**
 
 Compute:
 - Documents per source.
@@ -902,7 +902,7 @@ Compute:
 - Eligible question counts and split counts.
 - Exclusion reasons.
 
-- [ ] **Step 2: Update `docs/architecture/ingestion.md`**
+- [x] **Step 2: Update `docs/architecture/ingestion.md`**
 
 Document:
 - Pipeline flow.
@@ -913,15 +913,15 @@ Document:
 - Manifest rules and label-leakage warning.
 - Known limitations.
 
-- [ ] **Step 3: Update the decision record**
+- [x] **Step 3: Update the decision record**
 
 Add actual counts from the real run. Mark estimates as estimates and measured values as measured.
 
-- [ ] **Step 4: Update `README.md`**
+- [x] **Step 4: Update `README.md`**
 
 Add current status, setup commands, ingestion commands, and known limitations.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/ README.md

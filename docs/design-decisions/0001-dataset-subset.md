@@ -78,6 +78,55 @@ The 30 abstention questions have no expected documents and cover `high_level` an
 - Minimum chunk size: 50 tokens
 - Token counting must use the embedding model tokenizer, not whitespace splitting
 
+## Measured Block 1 results
+
+Measured on 2026-11-06 from the final ingestion pipeline over the downloaded subset.
+These values are measured, not estimates.
+
+- Loaded document members: 34,378
+- Unique `doc_id` values: 34,375
+- Documents chunked: 34,378
+- Documents skipped: 0
+- Documents failed: 0
+- Duplicate `(doc_id, content_hash)` pairs: 0
+- Chunks: 136,383
+- Unique chunk IDs: 136,383
+- Empty documents: 0
+- Malformed document IDs: 0
+- Loader issues: 0
+
+Documents and chunks by source:
+
+| Source | Documents | Chunks |
+|---|---:|---:|
+| Confluence | 5,189 | 41,190 |
+| GitHub | 8,052 | 29,797 |
+| HubSpot | 15,017 | 39,059 |
+| Jira | 6,120 | 26,337 |
+| **Total** | **34,378** | **136,383** |
+
+Distribution statistics:
+
+| Metric | Min | Median | p95 | Max | Mean |
+|---|---:|---:|---:|---:|---:|
+| Characters per document | 53 | 4,204 | 10,230 | 24,827 | 4,885.14 |
+| Tokens per document | 16 | 1,030 | 2,737 | 8,016 | 1,229.30 |
+| Chunks per document | 1 | 3 | 8 | 24 | 3.97 |
+| Tokens per chunk | 16 | 400 | 400 | 400 | 357.74 |
+
+The chunk distribution is concentrated at 400 tokens: 102,097 of 136,383 chunks are
+exactly 400 tokens, while shorter documents produce single chunks below 400 tokens.
+The smallest chunks come from short documents, not from trailing windows.
+
+Verification:
+
+- Rerunning the full ingestion produced byte-identical outputs.
+- `chunks.jsonl` SHA256:
+  `cd9539fd77c1b0f0c375bb70f84798770f21e45666429ce958fc7754058369dc`
+- `stats.json` SHA256:
+  `66f0b014d85f159e6caa0fc6d40c71789babce9dcf2028e398929bf8aefba38d`
+- Generated EDA artifact: `data/processed/eda.json` (gitignored)
+
 ## Data-quality findings
 
 The release slices contain 34,378 document members but only 34,375 unique `doc_id`
@@ -92,12 +141,21 @@ The inventory therefore maps each `doc_id` to the set of source types where it
 appears and retains every source variant. This preserves the official release data
 instead of silently dropping one copy.
 
+Normalization also found two identical normalized-content hashes, each shared by two
+documents with different `doc_id` values. These are not exact
+`(doc_id, content_hash)` duplicates and are retained as distinct documents.
+
+The 34,378 chunked documents map to 34,377 unique `(source_type, doc_id)` groups
+because one Jira `doc_id` appears twice.
+
 Consequences for later tasks:
 
 - Document storage must use a composite identity such as
   `(source_type, doc_id)`, not `doc_id` alone.
-- Chunk IDs must include `source_type` or another document-level discriminator to
-  remain unique.
+- Chunk IDs use `doc_id:chunk_index:sha256(content)[:12]`. The content hash
+  discriminates conflicting same-ID documents, and exact
+  `(doc_id, content_hash)` duplicates are dropped before chunking. The measured
+  corpus has 136,383 unique chunk IDs for 136,383 chunks.
 - Retrieval evaluation should deduplicate retrieved results by `doc_id` when
   comparing against `expected_doc_ids`.
 - Loaders must preserve the original member path and source type.
@@ -112,5 +170,8 @@ Consequences for later tasks:
 - `data/sample/abstention_questions.jsonl`: 30 zero-gold questions
 - `data/sample/excluded_questions.jsonl`: 259 excluded questions with reasons
 - `data/sample/subset_manifest.json`: split IDs, counts, inventory summary, and exclusions
+- `data/processed/chunks.jsonl`: 136,383 chunks, approximately 242 MiB (gitignored)
+- `data/processed/stats.json`: deterministic ingestion statistics (gitignored)
+- `data/processed/eda.json`: generated EDA statistics (gitignored)
 
 Download integrity: 11 assets, 84.5 MiB, all zip archives passed `testzip()`.

@@ -6,15 +6,19 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Block 1 planning is complete and approved. Application code has not been implemented yet.**
+**Block 1 ingestion is implemented and validated on the real subset. Final end-to-end verification is the remaining Block 1 step.**
 
-The approved Block 1 plan is in [`plan.md`](plan.md). The first implementation block covers:
+The approved Block 1 plan is in [`plan.md`](plan.md). Block 1 currently provides:
 
-- Reproducible dataset subset acquisition.
-- Document loading and normalization.
-- Token-aware chunking with metadata.
-- A validated chunk corpus and EDA report.
-- Unit, integration, and data-quality tests.
+- Reproducible dataset subset acquisition and manifest generation.
+- Zip and parquet document loaders.
+- Deterministic normalization with content hashing.
+- Token-aware chunking with metadata and BGE tokenization.
+- A validated corpus of 34,378 documents and 136,383 chunks.
+- Unit, integration, and real-subset smoke tests.
+
+The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The design is
+documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md).
 
 Embeddings, PostgreSQL/pgvector, retrieval, generation, evaluation, authentication, and the API are deliberately deferred to later blocks.
 
@@ -37,11 +41,13 @@ This platform aims to:
 
 | Decision | Choice |
 |---|---|
-| Dataset | Official [`onyx-dot-app/EnterpriseRAG-Bench`](https://huggingface.co/datasets/onyx-dot-app/EnterpriseRAG-Bench) |
-| Block 1 corpus | All release slices for Confluence, Jira, GitHub, and HubSpot (~34k docs) |
+| Dataset | Official [`onyx-dot-app/EnterpriseRAG-Bench`](https://github.com/onyx-dot-app/EnterpriseRAG-Bench) |
+| Block 1 corpus | 10 release slices for Confluence, Jira, GitHub, and HubSpot |
+| Block 1 documents | 34,378 document members; 34,375 unique `doc_id` values |
+| Block 1 chunks | 136,383 chunks from 34,378 documents |
 | Initial embedding model | `BAAI/bge-large-en-v1.5` (1024 dimensions) |
 | Chunking baseline | 400 tokens, 64-token overlap, 50-token minimum |
-| Evaluation split | Stratified 80/20 development/holdout, fixed seed |
+| Evaluation split | Stratified 80/20 development/holdout, seed 42 |
 
 The `SJChen02/EnterpriseRAG-Bench` Hugging Face repository is a mirror. The official repository is used for provenance.
 
@@ -129,9 +135,45 @@ Documents are UTF-8 text exports, not PDFs. The Hugging Face parquet has four co
 - The official benchmark uses an LLM judge and different metrics from RAGAS. Local RAGAS results and official benchmark results must be labeled separately.
 - The dataset is synthetic. It does not validate PDF/OCR ingestion, tenant isolation, or document-version comparison.
 
+### Block 1 subset and measured results
+
+Block 1 downloads every release slice for Confluence, Jira, GitHub, and HubSpot: 10
+zip slices and 84.5 MiB. The measured ingestion run produced:
+
+| Metric | Value |
+|---|---:|
+| Document members | 34,378 |
+| Unique `doc_id` values | 34,375 |
+| Chunks | 136,383 |
+| Unique chunk IDs | 136,383 |
+| Documents chunked | 34,378 |
+| Documents skipped or failed | 0 |
+| Empty documents | 0 |
+| Malformed document IDs | 0 |
+
+| Source | Documents | Chunks |
+|---|---:|---:|
+| Confluence | 5,189 | 41,190 |
+| GitHub | 8,052 | 29,797 |
+| HubSpot | 15,017 | 39,059 |
+| Jira | 6,120 | 26,337 |
+
+Question selection produced 211 eligible retrieval questions: 169 development, 42
+holdout, and 30 abstention. The remaining 259 questions require at least one source
+outside the Block 1 subset. No eligible question had a missing gold document.
+
+The chunk corpus has 400-token maximum chunks with a median of 3 chunks per document.
+Two content hashes each appear twice across different documents, and three document
+members share an existing `doc_id`. Document storage in later blocks must therefore
+use `(source_type, doc_id)` as the document identity, while retrieval evaluation
+should deduplicate by `doc_id`.
+
+See [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md) for the full
+EDA summary and pipeline design.
+
 ## Repository Layout
 
-Planned Block 1 structure:
+Implemented Block 1 structure:
 
 ```text
 productionRAG/
@@ -140,10 +182,16 @@ productionRAG/
 │   │   ├── config.py
 │   │   └── ingestion/
 │   │       ├── models.py
+│   │       ├── manifest.py
+│   │       ├── pipeline.py
 │   │       ├── loaders/
+│   │       │   ├── base.py
+│   │       │   ├── zip_loader.py
+│   │       │   └── parquet_loader.py
 │   │       ├── preprocessing/
-│   │       ├── chunking/
-│   │       └── pipeline.py
+│   │       │   └── normalize.py
+│   │       └── chunking/
+│   │           └── token_chunker.py
 │   └── tests/
 │       ├── unit/
 │       ├── integration/
@@ -155,13 +203,12 @@ productionRAG/
 ├── data/
 │   ├── raw/          # gitignored
 │   ├── processed/    # gitignored
-│   └── sample/       # tiny committed fixtures and manifests
+│   └── sample/       # committed question splits and manifest
 ├── docs/
-│   ├── architecture/
-│   └── design-decisions/
+│   ├── architecture/ingestion.md
+│   └── design-decisions/0001-dataset-subset.md
 ├── pyproject.toml
 ├── uv.lock
-├── .env.example
 ├── .gitignore
 ├── README.md
 └── plan.md
@@ -180,15 +227,11 @@ Future modules will be added only when their implementation block begins.
 
 ### Installation
 
-The project is not implemented yet. Once Block 1 Task 1 is complete, the setup will be:
-
 ```bash
 uv sync
 ```
 
 ### Block 1 workflow
-
-After the Block 1 scripts are implemented:
 
 ```bash
 # Download the approved release slices and questions
@@ -201,11 +244,14 @@ uv run python scripts/build_subset_manifest.py
 uv run python scripts/ingest_subset.py --raw-dir data/raw --output-dir data/processed
 ```
 
+For a quick development run, add `--sources confluence --max-docs 20`.
+
 Outputs:
 
 - `data/raw/`: downloaded slices and questions (gitignored)
-- `data/processed/chunks.jsonl`: chunk corpus (gitignored)
-- `data/processed/stats.json`: ingestion statistics (gitignored)
+- `data/processed/chunks.jsonl`: 136,383-chunk corpus, approximately 242 MiB (gitignored)
+- `data/processed/stats.json`: deterministic ingestion statistics (gitignored)
+- `data/processed/eda.json`: generated EDA statistics (gitignored)
 - `data/sample/*.jsonl`: committed question splits
 - `data/sample/subset_manifest.json`: committed manifest
 
@@ -246,11 +292,13 @@ uv run ruff format --check .
 
 ## Known Limitations
 
-- No application code exists yet.
+- Block 1 stops at ingestion. There are no embeddings, indexes, retrievers, or generated answers yet.
 - Block 1 uses a four-source development subset, not the full 511,962-document corpus.
 - PDF and OCR ingestion are not implemented or validated by this dataset.
+- The corpus has 34,378 document members but 34,375 unique `doc_id` values. Later blocks must use `(source_type, doc_id)` for storage identity.
 - Metadata-aware retrieval is not implemented.
 - Document-version comparison is not supported by the dataset and requires a separate design.
+- Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
 - No retrieval or generation benchmark results have been produced.
 - No multi-tenant authentication or authorization exists yet.
@@ -258,8 +306,8 @@ uv run ruff format --check .
 ## Documentation
 
 - [`plan.md`](plan.md): detailed Block 1 implementation plan.
-- `docs/architecture/`: system and ingestion design.
-- `docs/design-decisions/`: architectural decision records.
+- [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
+- [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
 - `docs/evaluation/`: evaluation methodology and results, added later.
 
 ## License and Attribution
