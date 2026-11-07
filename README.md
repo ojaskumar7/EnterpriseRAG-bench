@@ -6,7 +6,7 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Block 1 ingestion is implemented and validated on the real subset. Final end-to-end verification is the remaining Block 1 step.**
+**Block 1 is complete. The ingestion pipeline is implemented, verified on the real subset, and ready for Block 2.**
 
 The approved Block 1 plan is in [`plan.md`](plan.md). Block 1 currently provides:
 
@@ -264,6 +264,26 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
+### Block 1 verification evidence
+
+- `uv run pytest -q`: 56 passed.
+- `uv run pytest -q -m integration`: real-subset smoke passed; 55 deselected.
+- `uv run ruff check .`: passed.
+- `uv run ruff format --check .`: 26 files already formatted.
+- Chunk corpus: 136,383 chunks, 136,383 unique chunk IDs, maximum 400 tokens.
+- Ingestion counts: 34,378 loaded, 34,378 chunked, 0 skipped, 0 duplicate, 0 failed.
+- Question coverage: 0 missing gold documents across 169 development and 42 holdout questions.
+- Answerability: all 30 abstention questions have no expected documents; all 259 excluded questions require an unsupported source type.
+- Git: no raw or processed dataset files are tracked.
+
+### Block 1 retrospective
+
+- The release data contains duplicate `doc_id` values, so composite document identity is required. This was discovered from the real data rather than assumed during planning.
+- Tokenizer offsets made character-preserving chunks straightforward, while balanced tail handling avoided sub-minimum trailing chunks for configs where the minimum exceeds the overlap.
+- Atomic temporary-file writes plus sorted inputs and JSON keys produced byte-identical reruns.
+- The fixed 400/64/50 chunking baseline is now measured but not tuned. Tuning belongs after retrieval evaluation exists.
+- Block 2 should start with the embedding provider and dense retrieval over the generated chunk corpus.
+
 ## Development Roadmap
 
 | Block | Focus |
@@ -300,7 +320,7 @@ uv run ruff format --check .
 - Document-version comparison is not supported by the dataset and requires a separate design.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
-- No retrieval or generation benchmark results have been produced.
+- No retrieval or generation benchmark results have been produced, and no benchmark performance is claimed.
 - No multi-tenant authentication or authorization exists yet.
 
 ## Documentation

@@ -940,7 +940,7 @@ git commit -m "docs: document ingestion design and subset statistics"
 - Consumes: all Block 1 deliverables.
 - Produces: verification evidence and a short retrospective.
 
-- [ ] **Step 1: Run the full test suite**
+- [x] **Step 1: Run the full test suite**
 
 ```bash
 uv run pytest -q
@@ -949,7 +949,7 @@ uv run pytest -q -m integration
 
 Expected: all non-skipped tests pass.
 
-- [ ] **Step 2: Run lint and formatting checks**
+- [x] **Step 2: Run lint and formatting checks**
 
 ```bash
 uv run ruff check .
@@ -958,7 +958,7 @@ uv run ruff format --check .
 
 Expected: no errors.
 
-- [ ] **Step 3: Verify the real outputs**
+- [x] **Step 3: Verify the real outputs**
 
 Check:
 - `data/processed/chunks.jsonl` exists and is non-empty.
@@ -967,7 +967,7 @@ Check:
 - Manifest has no missing gold documents.
 - No raw or processed data is staged in git.
 
-- [ ] **Step 4: Record known limitations**
+- [x] **Step 4: Record known limitations**
 
 Include:
 - Block 1 uses a four-source subset, not the full corpus.
@@ -977,7 +977,7 @@ Include:
 - No retrieval or generation evaluation has been run.
 - No benchmark results are claimed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md
@@ -1025,25 +1025,25 @@ uv run ruff format --check .
 
 ## Completion Checklist
 
-- [ ] Git repository initialized.
-- [ ] `uv` environment and lockfile created.
-- [ ] Ruff and pytest configured and passing.
-- [ ] Official four-source subset downloaded reproducibly.
-- [ ] Download manifest records sizes, hashes, and file counts.
-- [ ] Question manifest selects only questions with complete gold-document coverage.
-- [ ] Zero-gold questions routed to a separate abstention set.
-- [ ] Stratified 80/20 split created with a fixed seed.
-- [ ] Document and chunk models implemented and validated.
-- [ ] Zip and parquet loaders implemented with safety checks.
-- [ ] Normalization deterministic and tested.
-- [ ] Chunking token-bounded, deterministic, and offset-preserving.
-- [ ] Pipeline writes `chunks.jsonl` and `stats.json`.
-- [ ] Reruns are idempotent.
-- [ ] EDA report contains real measured values.
-- [ ] README and ingestion documentation updated.
-- [ ] Known limitations documented.
-- [ ] No embedding, database, retrieval, LLM, or API code added.
-- [ ] No benchmark results fabricated.
+- [x] Git repository initialized.
+- [x] `uv` environment and lockfile created.
+- [x] Ruff and pytest configured and passing.
+- [x] Official four-source subset downloaded reproducibly.
+- [x] Download manifest records sizes, hashes, and file counts.
+- [x] Question manifest selects only questions with complete gold-document coverage.
+- [x] Zero-gold questions routed to a separate abstention set.
+- [x] Stratified 80/20 split created with a fixed seed.
+- [x] Document and chunk models implemented and validated.
+- [x] Zip and parquet loaders implemented with safety checks.
+- [x] Normalization deterministic and tested.
+- [x] Chunking token-bounded, deterministic, and offset-preserving.
+- [x] Pipeline writes `chunks.jsonl` and `stats.json`.
+- [x] Reruns are idempotent.
+- [x] EDA report contains real measured values.
+- [x] README and ingestion documentation updated.
+- [x] Known limitations documented.
+- [x] No embedding, database, retrieval, LLM, or API code added.
+- [x] No benchmark results fabricated.
 
 ---
 
