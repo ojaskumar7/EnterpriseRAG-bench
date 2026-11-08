@@ -6,21 +6,27 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Block 1 is complete. The ingestion pipeline is implemented, verified on the real subset, and ready for Block 2.**
+**Blocks 1 and 2 are complete. The ingestion pipeline and dense retrieval stack are
+implemented, verified on the real subset, and ready for Block 3.**
 
-The approved Block 1 plan is in [`plan.md`](plan.md). Block 1 currently provides:
+The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
 - Reproducible dataset subset acquisition and manifest generation.
 - Zip and parquet document loaders.
 - Deterministic normalization with content hashing.
 - Token-aware chunking with metadata and BGE tokenization.
 - A validated corpus of 34,378 documents and 136,383 chunks.
-- Unit, integration, and real-subset smoke tests.
+- BGE embeddings loaded into PostgreSQL with pgvector.
+- An idempotent embedding/load pipeline and an HNSW cosine index.
+- Dense retrieval with a leakage-safe interface and development recall/MRR metrics.
+- Unit, integration, and real-subset tests.
 
-The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The design is
-documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md).
+The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
+documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md) and
+[`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md).
 
-Embeddings, PostgreSQL/pgvector, retrieval, generation, evaluation, authentication, and the API are deliberately deferred to later blocks.
+BM25, hybrid retrieval, reranking, generation, the full benchmark evaluation harness,
+authentication, and the API are deliberately deferred to later blocks.
 
 ## Problem
 
@@ -46,6 +52,8 @@ This platform aims to:
 | Block 1 documents | 34,378 document members; 34,375 unique `doc_id` values |
 | Block 1 chunks | 136,383 chunks from 34,378 documents |
 | Initial embedding model | `BAAI/bge-large-en-v1.5` (1024 dimensions) |
+| Embedding runtime | PyTorch 2.8.0 (CUDA 12.8), `float16` for the measured bulk load |
+| Vector store | PostgreSQL 16 + pgvector, HNSW cosine index |
 | Chunking baseline | 400 tokens, 64-token overlap, 50-token minimum |
 | Evaluation split | Stratified 80/20 development/holdout, seed 42 |
 
@@ -173,25 +181,36 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
-Implemented Block 1 structure:
+Implemented Blocks 1 and 2 structure:
 
 ```text
 productionRAG/
 ├── backend/
 │   ├── app/
 │   │   ├── config.py
-│   │   └── ingestion/
-│   │       ├── models.py
-│   │       ├── manifest.py
-│   │       ├── pipeline.py
-│   │       ├── loaders/
-│   │       │   ├── base.py
-│   │       │   ├── zip_loader.py
-│   │       │   └── parquet_loader.py
-│   │       ├── preprocessing/
-│   │       │   └── normalize.py
-│   │       └── chunking/
-│   │           └── token_chunker.py
+│   │   ├── settings.py
+│   │   ├── ingestion/
+│   │   │   ├── models.py
+│   │   │   ├── manifest.py
+│   │   │   ├── pipeline.py
+│   │   │   ├── loaders/
+│   │   │   ├── preprocessing/
+│   │   │   └── chunking/
+│   │   ├── embeddings/
+│   │   │   ├── base.py
+│   │   │   ├── bge.py
+│   │   │   ├── fake.py
+│   │   │   └── loader.py
+│   │   ├── db/
+│   │   │   ├── base.py
+│   │   │   ├── models.py
+│   │   │   ├── repositories.py
+│   │   │   └── session.py
+│   │   └── retrieval/
+│   │       ├── dense.py
+│   │       └── metrics.py
+│   ├── alembic.ini
+│   ├── alembic/
 │   └── tests/
 │       ├── unit/
 │       ├── integration/
@@ -199,14 +218,24 @@ productionRAG/
 ├── scripts/
 │   ├── download_subset.py
 │   ├── build_subset_manifest.py
-│   └── ingest_subset.py
+│   ├── ingest_subset.py
+│   ├── check_embedding_runtime.py
+│   ├── embed_and_load.py
+│   ├── dense_search.py
+│   └── eval_dense_dev.py
 ├── data/
 │   ├── raw/          # gitignored
 │   ├── processed/    # gitignored
 │   └── sample/       # committed question splits and manifest
 ├── docs/
-│   ├── architecture/ingestion.md
-│   └── design-decisions/0001-dataset-subset.md
+│   ├── architecture/
+│   │   ├── ingestion.md
+│   │   └── embeddings-and-retrieval.md
+│   └── design-decisions/
+│       ├── 0001-dataset-subset.md
+│       └── 0002-vector-store-and-embedding-runtime.md
+├── compose.yml
+├── .env.example
 ├── pyproject.toml
 ├── uv.lock
 ├── .gitignore
@@ -223,7 +252,7 @@ Future modules will be added only when their implementation block begins.
 - Python 3.12
 - [`uv`](https://docs.astral.sh/uv/)
 - Git
-- Docker (for later database and infrastructure blocks)
+- Docker and Docker Compose (for PostgreSQL/pgvector)
 
 ### Installation
 
@@ -255,6 +284,37 @@ Outputs:
 - `data/sample/*.jsonl`: committed question splits
 - `data/sample/subset_manifest.json`: committed manifest
 
+### Block 2 workflow
+
+```bash
+# Start PostgreSQL with pgvector
+docker compose up -d db
+
+# Apply the schema and HNSW index
+uv run alembic -c backend/alembic.ini upgrade head
+
+# Check the CUDA/model runtime before the full load
+uv run python scripts/check_embedding_runtime.py --device cuda --dtype float16
+
+# Embed and load all 136,383 chunks (idempotent; reruns skip existing embeddings)
+uv run python scripts/embed_and_load.py \
+  --chunks data/processed/chunks.jsonl \
+  --device cuda \
+  --dtype float16 \
+  --batch-size 128
+
+# Query the index
+uv run python scripts/dense_search.py "How do I rotate an API key?" \
+  --top-k 5 --device cuda --dtype float16
+
+# Evaluate only the development split
+uv run python scripts/eval_dense_dev.py --top-k 20 --device cuda --dtype float16
+```
+
+The development metrics file is written to
+`data/processed/dense_dev_metrics.json` (gitignored). Do not run the holdout split
+during development.
+
 ### Testing
 
 ```bash
@@ -276,13 +336,63 @@ uv run ruff format --check .
 - Answerability: all 30 abstention questions have no expected documents; all 259 excluded questions require an unsupported source type.
 - Git: no raw or processed dataset files are tracked.
 
+### Block 2 verification evidence
+
+- Full load: 34,378 documents and 136,383 chunks, all with 1024-dimensional embeddings.
+- Unique chunk IDs: 136,383; orphan chunks: 0; wrong embedding dimensions: 0.
+- HNSW cosine index exists and is used by an `ORDER BY embedding <=> ... LIMIT` plan.
+- Loader rerun: 0 rows written, 0 chunks embedded, 136,383 chunks skipped.
+- Development metrics: recall@1 0.2840, recall@5 0.4643, recall@10 0.5362,
+  recall@20 0.5836, MRR 0.4330 over 169 questions.
+- `uv run pytest -q`: 93 passed.
+- `uv run ruff check .`: passed.
+- `uv run ruff format --check .`: passed.
+- Holdout set: not used.
+
 ### Block 1 retrospective
 
 - The release data contains duplicate `doc_id` values, so composite document identity is required. This was discovered from the real data rather than assumed during planning.
 - Tokenizer offsets made character-preserving chunks straightforward, while balanced tail handling avoided sub-minimum trailing chunks for configs where the minimum exceeds the overlap.
 - Atomic temporary-file writes plus sorted inputs and JSON keys produced byte-identical reruns.
 - The fixed 400/64/50 chunking baseline is now measured but not tuned. Tuning belongs after retrieval evaluation exists.
-- Block 2 should start with the embedding provider and dense retrieval over the generated chunk corpus.
+- Block 2 started with the embedding provider and dense retrieval over the generated chunk corpus.
+
+## Block 2 measured results
+
+Block 2 embedded the full Block 1 corpus with `BAAI/bge-large-en-v1.5` and loaded it
+into PostgreSQL/pgvector:
+
+| Metric | Value |
+|---|---:|
+| Documents | 34,378 |
+| Chunks | 136,383 |
+| Non-null embeddings | 136,383 |
+| Embedding dimensions | 1024 |
+| Unique chunk IDs | 136,383 |
+| Orphan chunks | 0 |
+| HNSW index | present, cosine, `m=16`, `ef_construction=64` |
+| `chunks` total size | 2.0 GB |
+| HNSW index size | 1.1 GB |
+| Full load time | about 46 minutes |
+| Rerun after load | 0 written, 0 embedded, 136,383 skipped |
+
+Development retrieval metrics on the 169 development questions (top-20, `float16`):
+
+| Metric | Value |
+|---|---:|
+| recall@1 | 0.2840 |
+| recall@5 | 0.4643 |
+| recall@10 | 0.5362 |
+| recall@20 | 0.5836 |
+| MRR | 0.4330 |
+
+These are diagnostics, not benchmark claims. The 42-question holdout set remains
+untouched.
+
+The local GPU thermally throttles under sustained load, so the bulk load used
+`float16` weights. A 100-chunk comparison against `float32` produced a mean cosine
+similarity of 1.0001 and a minimum of 0.9998. Pass `--dtype float16` when querying this
+index.
 
 ## Development Roadmap
 
@@ -312,22 +422,25 @@ uv run ruff format --check .
 
 ## Known Limitations
 
-- Block 1 stops at ingestion. There are no embeddings, indexes, retrievers, or generated answers yet.
+- Block 2 stops at dense retrieval. There is no BM25, hybrid retrieval, reranking, or generated answer yet.
 - Block 1 uses a four-source development subset, not the full 511,962-document corpus.
 - PDF and OCR ingestion are not implemented or validated by this dataset.
-- The corpus has 34,378 document members but 34,375 unique `doc_id` values. Later blocks must use `(source_type, doc_id)` for storage identity.
+- The corpus has 34,378 document members but 34,375 unique `doc_id` values. The database uses content-addressed identity `(tenant_id, knowledge_base_id, source_type, doc_id, content_hash)` to preserve duplicate IDs.
 - Metadata-aware retrieval is not implemented.
 - Document-version comparison is not supported by the dataset and requires a separate design.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
-- No retrieval or generation benchmark results have been produced, and no benchmark performance is claimed.
+- Dense retrieval has development-split diagnostics only; there are no official benchmark results yet.
+- The measured index was built with `float16` weights because the laptop GPU thermally throttles; queries must use the same dtype.
 - No multi-tenant authentication or authorization exists yet.
 
 ## Documentation
 
-- [`plan.md`](plan.md): detailed Block 1 implementation plan.
+- [`plan.md`](plan.md): detailed Block 1 and Block 2 implementation plan.
 - [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
+- [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md): embeddings, pgvector schema, loading, dense retrieval, and measured results.
 - [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
+- [`docs/design-decisions/0002-vector-store-and-embedding-runtime.md`](docs/design-decisions/0002-vector-store-and-embedding-runtime.md): pgvector, BGE, PyTorch/CUDA, and dtype decisions.
 - `docs/evaluation/`: evaluation methodology and results, added later.
 
 ## License and Attribution

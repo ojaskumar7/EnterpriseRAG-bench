@@ -1062,15 +1062,464 @@ uv run ruff format --check .
 
 ---
 
-## Next Block Preview
+## Block 2 Implementation Plan — Embeddings and Dense Retrieval
 
-Block 2 should add:
+**Goal:** Add a local BGE embedding provider, persist documents/chunks/vectors in
+PostgreSQL with pgvector, implement dense retrieval, and run a development-split
+retrieval sanity check over the full 136,383-chunk corpus.
 
-- Embedding provider interface.
-- BGE-large-en-v1.5 embedding generation.
-- PostgreSQL and pgvector via Docker.
-- Document and chunk tables with tenant/knowledge-base placeholders.
-- Dense retrieval over the Block 1 chunk corpus.
-- Retrieval tests on the development question split.
+**Architecture:** A provider-agnostic `EmbeddingProvider` produces normalized BGE
+vectors. An idempotent batch loader streams `chunks.jsonl`, upserts documents and
+chunks, and stores 1024-dimensional vectors. A `DenseRetriever` embeds queries and
+uses pgvector cosine distance with tenant/knowledge-base filters. Evaluation metadata
+never enters the retriever interface.
 
-Do not start Block 2 until Block 1 verification is complete.
+**Tech Stack:** Python 3.12, `uv`, sentence-transformers, PyTorch, SQLAlchemy 2.0
+async, asyncpg, Alembic, pgvector, PostgreSQL 16, pytest-asyncio, Ruff.
+
+**Estimated effort:** 20-24 hours implementation plus embedding/index runtime.
+
+**Status:** complete. Implementation, full load, development metrics, verification,
+and commits are done.
+
+### Global Constraints
+
+- Use `BAAI/bge-large-en-v1.5` with 1024-dimensional normalized embeddings.
+- Use the BGE query instruction for queries only; do not prepend it to documents.
+- Keep the 42 holdout questions untouched. Development metrics are diagnostics, not
+  benchmark claims.
+- Never pass `expected_doc_ids`, `question_type`, `source_types`, or `gold_answer` to a
+  retriever-shaped interface. `source_types` may be a user-selected product filter.
+- Store `(source_type, doc_id, document_content_hash)` as the document identity.
+  `(source_type, doc_id)` is not unique.
+- Do not add BM25, hybrid retrieval, RRF, reranking, Gemini, FastAPI, or full RAGAS
+  evaluation in this block.
+- Do not commit raw or processed data, model caches, embeddings, or database volumes.
+- Run `uv run pytest`, database integration tests, Ruff, and formatting checks before
+  claiming completion.
+
+### Task 0: Lock Block 2 Decisions
+
+- [x] Confirm async SQLAlchemy 2.0 + asyncpg as the database layer.
+- [x] Confirm PostgreSQL 16 + pgvector via Docker Compose.
+- [x] Confirm HNSW cosine index.
+- [x] Confirm recall@1/5/10/20 and MRR on the 169 development questions.
+- [x] Record decisions in `docs/design-decisions/0002-vector-store-and-embedding-runtime.md`.
+
+### Task 1: Dependencies, Settings, and Local Infrastructure
+
+**Files:**
+- Modify: `pyproject.toml`
+- Create: `.env.example`
+- Create: `compose.yml`
+- Create: `backend/app/settings.py`
+- Create: `backend/tests/unit/test_settings.py`
+- Create: `scripts/check_embedding_runtime.py`
+
+- [x] **Step 1: Add dependencies**
+
+Runtime: `sentence-transformers`, `torch`, `sqlalchemy[asyncio]`, `asyncpg`,
+`alembic`, `pgvector`, `pydantic-settings`.
+
+Development: `pytest-asyncio`.
+
+- [x] **Step 2: Add Docker Compose for PostgreSQL/pgvector**
+
+Use `pgvector/pgvector:pg16` with a named volume, health check, and local port 5433
+(port 5432 was occupied on the development host).
+The database name, user, and password are local development credentials only.
+
+- [x] **Step 3: Add settings**
+
+`Settings` should provide:
+
+- `database_url`
+- `embedding_model`
+- `embedding_dimension`
+- `embedding_device`
+- `embedding_batch_size`
+- `embedding_query_instruction`
+- `default_tenant_id`
+- `default_knowledge_base_id`
+
+Load `.env` with pydantic-settings and expose a cached `get_settings()`.
+
+- [x] **Step 4: Validate the runtime**
+
+`scripts/check_embedding_runtime.py` should print the PyTorch version, CUDA
+availability, device name, BGE embedding dimension, and a sample embedding shape.
+Run it before the full embedding job.
+
+- [x] **Step 5: Verify**
+
+```bash
+uv sync
+uv run python scripts/check_embedding_runtime.py
+uv run pytest backend/tests/unit/test_settings.py -v
+uv run ruff check .
+```
+
+- [x] **Step 6: Commit**
+
+```bash
+git add pyproject.toml uv.lock .env.example compose.yml backend/app/settings.py \
+  backend/tests/unit/test_settings.py scripts/check_embedding_runtime.py
+git commit -m "chore: add embedding and database infrastructure"
+```
+
+### Task 2: Extend the Chunk Contract
+
+**Files:**
+- Modify: `backend/app/ingestion/models.py`
+- Modify: `backend/app/ingestion/chunking/token_chunker.py`
+- Modify: `backend/tests/unit/test_chunking.py`
+- Regenerate: `data/processed/chunks.jsonl` (gitignored)
+
+- [x] **Step 1: Add `document_content_hash`**
+
+Add `document_content_hash` to `Chunk` and populate it from
+`NormalizedDocument.content_hash` in `TokenChunker`.
+
+- [x] **Step 2: Update tests**
+
+Assert that every chunk carries the document content hash and that chunk IDs still
+depend only on chunk content and chunk index.
+
+- [x] **Step 3: Regenerate the corpus**
+
+```bash
+uv run python scripts/ingest_subset.py --raw-dir data/raw --output-dir data/processed
+```
+
+- [x] **Step 4: Verify**
+
+```bash
+uv run pytest backend/tests/unit/test_chunking.py -v
+uv run pytest -q
+```
+
+Confirm that chunk IDs and the 136,383 chunk count are unchanged.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add backend/app/ingestion/models.py backend/app/ingestion/chunking/token_chunker.py \
+  backend/tests/unit/test_chunking.py backend/tests/unit/test_models.py
+git commit -m "feat: add document identity hash to chunks"
+```
+
+### Task 3: Embedding Provider
+
+**Files:**
+- Create: `backend/app/embeddings/__init__.py`
+- Create: `backend/app/embeddings/base.py`
+- Create: `backend/app/embeddings/bge.py`
+- Create: `backend/tests/unit/test_embeddings.py`
+
+- [x] **Step 1: Define the protocol**
+
+```python
+class EmbeddingProvider(Protocol):
+    model_name: str
+    dimension: int
+
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
+    def embed_query(self, text: str) -> list[float]: ...
+```
+
+- [x] **Step 2: Implement the BGE provider**
+
+- Lazily load `SentenceTransformer`.
+- Resolve `auto`, `cuda`, and `cpu` device selection.
+- Validate that the model dimension matches the configured dimension.
+- Normalize document and query embeddings.
+- Prepend the BGE query instruction only in `embed_query`.
+- Use configurable batch size and progress reporting.
+
+- [x] **Step 3: Add a fake provider**
+
+Use a deterministic fake provider for downstream tests. It must not download a model.
+
+- [x] **Step 4: Test**
+
+Cover query-instruction behavior, document batching, device resolution, dimension
+validation, and normalized output shape. Monkeypatch the model in unit tests.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add backend/app/embeddings/__init__.py backend/app/embeddings/base.py \
+  backend/app/embeddings/bge.py backend/app/embeddings/fake.py \
+  backend/tests/unit/test_embeddings.py
+git commit -m "feat: add BGE embedding provider"
+```
+
+### Task 4: Database Schema, Migrations, and Repositories
+
+**Files:**
+- Create: `backend/app/db/__init__.py`
+- Create: `backend/app/db/base.py`
+- Create: `backend/app/db/models.py`
+- Create: `backend/app/db/session.py`
+- Create: `backend/app/db/repositories.py`
+- Create: `backend/alembic.ini`
+- Create: `backend/alembic/env.py`
+- Create: `backend/alembic/script.py.mako`
+- Create: `backend/alembic/versions/0001_initial.py`
+- Create: `backend/tests/integration/test_database.py`
+
+- [x] **Step 1: Add models**
+
+`documents`:
+
+- UUID primary key.
+- `tenant_id`, `knowledge_base_id`.
+- `doc_id`, `source_type`, `title`, `content_hash`, `metadata`.
+- Unique `(tenant_id, knowledge_base_id, source_type, doc_id, content_hash)`.
+
+`chunks`:
+
+- UUID primary key and `document_id` foreign key.
+- `tenant_id`, `knowledge_base_id`, `chunk_id`, `chunk_index`.
+- `content`, `token_count`, `start_char`, `end_char`, `content_hash`.
+- `source_type`, `title`, `metadata`.
+- Nullable `embedding vector(1024)` and `embedding_model`.
+- Unique `(tenant_id, knowledge_base_id, chunk_id)`.
+- Indexes for document lookup and source filtering.
+- HNSW cosine index on `embedding`.
+
+- [x] **Step 2: Add migrations**
+
+Use Alembic. The initial migration must run `CREATE EXTENSION IF NOT EXISTS vector`,
+create both tables, and create the HNSW index with `vector_cosine_ops`.
+
+- [x] **Step 3: Add async session and repositories**
+
+Provide an async engine/session factory from settings. Repository methods:
+
+- Upsert a document and return its UUID.
+- Upsert a batch of chunks.
+- Find chunk IDs that already have embeddings.
+- Count documents, chunks, and embedded chunks.
+- Search by cosine distance with tenant, knowledge-base, and optional source filters.
+
+- [x] **Step 4: Test**
+
+Unit-test settings and query construction. Add integration tests that skip cleanly when
+PostgreSQL is unavailable. Integration tests run migrations and verify:
+
+- Extension, tables, constraints, and HNSW index exist.
+- Upserts are idempotent.
+- A deterministic fake-vector search returns the expected cosine order.
+
+- [x] **Step 5: Verify**
+
+```bash
+uv run alembic -c backend/alembic.ini upgrade head
+uv run pytest backend/tests/integration/test_database.py -v -m integration
+```
+
+- [x] **Step 6: Commit**
+
+```bash
+git add backend/app/db backend/alembic.ini backend/alembic \
+  backend/tests/integration/test_database.py
+git commit -m "feat: add pgvector schema and repositories"
+```
+
+### Task 5: Embedding and Load CLI
+
+**Files:**
+- Create: `scripts/embed_and_load.py`
+- Create: `backend/tests/integration/test_embedding_load.py`
+
+- [x] **Step 1: Implement the loader**
+
+Stream `chunks.jsonl` in batches. For each batch:
+
+1. Upsert document rows keyed by `(source_type, doc_id, document_content_hash)`.
+2. Find chunks that already have embeddings and skip re-embedding them.
+3. Embed new chunk contents in batches.
+4. Upsert chunks with `embedding`, `embedding_model`, and metadata.
+
+Support `--chunks`, `--batch-size`, `--device`, `--limit`, `--model`, and
+`--tenant-id`/`--knowledge-base-id` overrides.
+
+- [x] **Step 2: Make it idempotent**
+
+A second run over the same corpus must not duplicate documents or chunks and must not
+re-embed chunks that already have embeddings. Transactions should commit per batch.
+
+- [x] **Step 3: Test**
+
+Use a fake provider and a disposable database. Verify document/chunk counts, embedding
+dimensions, rerun idempotency, and skip behavior.
+
+- [x] **Step 4: Commit**
+
+```bash
+git add backend/app/embeddings/loader.py scripts/embed_and_load.py \
+  backend/tests/integration/test_embedding_load.py
+git commit -m "feat: add idempotent embedding load pipeline"
+```
+
+### Task 6: Dense Retrieval and Development Metrics
+
+**Files:**
+- Create: `backend/app/retrieval/__init__.py`
+- Create: `backend/app/retrieval/dense.py`
+- Create: `backend/app/retrieval/metrics.py`
+- Create: `scripts/dense_search.py`
+- Create: `scripts/eval_dense_dev.py`
+- Create: `backend/tests/unit/test_retrieval_metrics.py`
+- Create: `backend/tests/integration/test_dense_retrieval.py`
+
+- [x] **Step 1: Implement the retriever**
+
+`DenseRetriever.retrieve(query, top_k=10, source_types=None)` embeds the query, runs
+pgvector cosine search, and returns chunk ID, document ID, source type, title, chunk
+index, content, and score.
+
+The retriever must not accept evaluation metadata.
+
+- [x] **Step 2: Add search CLI**
+
+```bash
+uv run python scripts/dense_search.py "How do I rotate an API key?" --top-k 5
+```
+
+- [x] **Step 3: Add development metrics**
+
+Read `data/sample/dev_questions.jsonl`. For each question:
+
+1. Retrieve top-k using only the question text.
+2. Deduplicate retrieved chunks by `doc_id`.
+3. Compare against `expected_doc_ids` after retrieval.
+4. Compute recall@1/5/10/20 and MRR.
+
+Write `data/processed/dense_dev_metrics.json` (gitignored). Do not run the holdout set.
+
+- [x] **Step 4: Test**
+
+Cover recall/MRR calculation, doc-level deduplication, empty results, source filters,
+and the retriever interface. Database tests use deterministic fake vectors.
+
+- [x] **Step 5: Commit**
+
+```bash
+git add backend/app/retrieval scripts/dense_search.py scripts/eval_dense_dev.py \
+  backend/tests/unit/test_dense_retriever.py backend/tests/unit/test_retrieval_metrics.py \
+  backend/tests/integration/test_dense_retrieval.py
+git commit -m "feat: add dense retrieval and development metrics"
+```
+
+### Task 7: Full Embedding Run and Verification
+
+- [x] **Step 1: Start PostgreSQL**
+
+```bash
+docker compose up -d db
+uv run alembic -c backend/alembic.ini upgrade head
+```
+
+- [x] **Step 2: Run the full load**
+
+```bash
+uv run python scripts/embed_and_load.py \
+  --chunks data/processed/chunks.jsonl \
+  --device cuda \
+  --batch-size 32
+```
+
+If HNSW insertion is too slow, drop the index before the bulk load and recreate it
+afterward. Record the chosen procedure.
+
+- [x] **Step 3: Verify database state**
+
+- 34,378 documents.
+- 136,383 chunks.
+- 136,383 non-null embeddings.
+- Every vector has 1024 dimensions.
+- Every chunk references a document.
+- HNSW cosine index exists.
+- A rerun adds no rows and skips existing embeddings.
+
+- [x] **Step 4: Run development retrieval metrics**
+
+```bash
+uv run python scripts/eval_dense_dev.py --top-k 20
+```
+
+Report recall@1/5/10/20 and MRR. These are diagnostics, not benchmark claims. The holdout
+set remains untouched.
+
+- [x] **Step 5: Verify**
+
+```bash
+uv run pytest -q
+uv run pytest -q -m integration
+uv run ruff check .
+uv run ruff format --check .
+```
+
+### Task 8: Documentation and Completion
+
+**Files:**
+- Create: `docs/architecture/embeddings-and-retrieval.md`
+- Create: `docs/design-decisions/0002-vector-store-and-embedding-runtime.md`
+- Modify: `README.md`
+- Append: `blog.md` (not committed)
+
+- [x] **Step 1: Document architecture and measured results**
+
+Cover the embedding provider, database schema, HNSW index, load idempotency, retrieval
+interface, development metrics, known limitations, and label-leakage rule.
+
+- [x] **Step 2: Update README**
+
+Add Block 2 status, setup commands, database migration/load commands, retrieval
+commands, and measured results.
+
+- [x] **Step 3: Append the Block 2 blog entry**
+
+Record what was built, why, what the real run measured, and what was learned. Keep
+`blog.md` excluded from git.
+
+- [x] **Step 4: Commit**
+
+```bash
+git add docs README.md plan.md
+git commit -m "docs: complete block 2 embeddings and dense retrieval"
+```
+
+### Block 2 Acceptance Criteria
+
+- `BAAI/bge-large-en-v1.5` provider works on the available GPU or a documented CPU
+  fallback.
+- All 136,383 chunks are loaded with 1024-dimensional embeddings.
+- The database contains 34,378 documents and 136,383 chunks with no duplicates.
+- HNSW cosine index exists and dense queries use it.
+- Rerunning the loader does not duplicate rows or re-embed existing chunks.
+- Development recall@k and MRR are reported without touching holdout data.
+- The retriever interface cannot receive evaluation metadata.
+- Unit, integration, and real-data checks pass.
+- No BM25, hybrid retrieval, reranking, generation, API, or full evaluation code is
+  added.
+
+### Block 2 Risks
+
+| Risk | Mitigation |
+|---|---|
+| RTX 5050/PyTorch CUDA incompatibility | Validate runtime before the full run; document CPU fallback |
+| GPU OOM during embedding | Tune batch size; use fp16 only after measuring quality impact |
+| Slow HNSW bulk insertion | Drop/recreate the index around the bulk load if needed |
+| Duplicate document identity | Use `(source_type, doc_id, document_content_hash)` |
+| Embedding-model mismatch | Store `embedding_model` and dimension; refuse mixed dimensions |
+| Label leakage | Keep evaluation metadata outside retriever interfaces |
+| Holdout overfitting | Use only the development split in Block 2 |
+
+### Next Block Preview
+
+Block 3 should add BM25, hybrid retrieval, and Reciprocal Rank Fusion over the same
+document/chunk tables, using the Block 2 dense-retrieval metrics as a comparison point.
+Do not start Block 3 until Block 2 verification is complete.
