@@ -5,27 +5,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.repositories import search_chunks
 from app.embeddings.base import EmbeddingProvider
-
-
-@dataclass(frozen=True)
-class RetrievedChunk:
-    """A chunk returned by a retrieval query."""
-
-    chunk_id: str
-    doc_id: str
-    source_type: str
-    title: str
-    chunk_index: int
-    content: str
-    score: float
-    metadata: dict[str, Any]
+from app.retrieval.types import RetrievedChunk
 
 
 class DenseRetriever:
