@@ -7,6 +7,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Computed,
     ForeignKey,
     Index,
     Integer,
@@ -14,13 +15,17 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 EMBEDDING_DIMENSION = 1024
+SEARCH_VECTOR_EXPRESSION = (
+    "setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') || "
+    "setweight(to_tsvector('english'::regconfig, coalesce(content, '')), 'B')"
+)
 
 
 class Document(Base):
@@ -84,6 +89,11 @@ class ChunkRecord(Base):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+        Index(
+            "ix_chunks_search_vector",
+            "search_vector",
+            postgresql_using="gin",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -103,6 +113,11 @@ class ChunkRecord(Base):
     chunk_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(SEARCH_VECTOR_EXPRESSION, persisted=True),
+        nullable=True,
+    )
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     start_char: Mapped[int] = mapped_column(Integer, nullable=False)
     end_char: Mapped[int] = mapped_column(Integer, nullable=False)

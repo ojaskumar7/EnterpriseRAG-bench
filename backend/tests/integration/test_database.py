@@ -246,3 +246,21 @@ async def test_search_honors_source_filter(session) -> None:
 
     assert [result.chunk.chunk_id for result in matching] == [chunk.chunk_id]
     assert missing == []
+
+
+async def test_lexical_search_schema_exists(session) -> None:
+    generated = await session.scalar(
+        text(
+            "SELECT is_generated FROM information_schema.columns "
+            "WHERE table_name = 'chunks' AND column_name = 'search_vector'"
+        )
+    )
+    index = await session.scalar(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'chunks' AND indexname = 'ix_chunks_search_vector'"
+        )
+    )
+
+    assert generated == "ALWAYS"
+    assert index == "ix_chunks_search_vector"
