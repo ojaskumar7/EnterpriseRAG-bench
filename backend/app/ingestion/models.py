@@ -70,6 +70,7 @@ class Chunk(DocumentModel):
     start_char: int
     end_char: int
     content_hash: str
+    document_content_hash: str
     source_type: SourceType
     title: str
     metadata: dict[str, Any] = Field(default_factory=dict)

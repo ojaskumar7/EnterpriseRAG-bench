@@ -70,6 +70,7 @@ class TokenChunker:
                     start_char=start_char,
                     end_char=end_char,
                     content_hash=digest,
+                    document_content_hash=document.content_hash,
                     source_type=document.source_type,
                     title=document.title,
                     metadata=dict(document.metadata),

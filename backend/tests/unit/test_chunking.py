@@ -148,3 +148,24 @@ def test_chunk_metadata_is_copied() -> None:
     assert chunks[0].source_type == document.source_type
     assert chunks[0].title == document.title
     assert chunks[0].metadata == {"origin": "test"}
+
+
+def test_chunks_carry_document_content_hash() -> None:
+    document = _document(_words(30))
+
+    chunks = _chunker().chunk(document)
+
+    assert chunks
+    assert all(chunk.document_content_hash == document.content_hash for chunk in chunks)
+
+
+def test_chunk_id_does_not_depend_on_document_content_hash() -> None:
+    content = _words(5)
+    first = _document(content)
+    second = first.model_copy(update={"content_hash": "different-document-hash"})
+
+    first_chunk = _chunker().chunk(first)[0]
+    second_chunk = _chunker().chunk(second)[0]
+
+    assert first_chunk.chunk_id == second_chunk.chunk_id
+    assert first_chunk.document_content_hash != second_chunk.document_content_hash

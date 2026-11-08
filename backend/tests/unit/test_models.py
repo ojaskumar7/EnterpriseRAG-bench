@@ -58,6 +58,7 @@ def test_chunk_serializes_to_json() -> None:
         start_char=0,
         end_char=10,
         content_hash="abc123",
+        document_content_hash="document-hash",
         source_type="jira",
         title="Title",
     )
