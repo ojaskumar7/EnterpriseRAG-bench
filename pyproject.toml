@@ -7,11 +7,19 @@ dependencies = [
     "pydantic>=2.0",
     "pyarrow>=17.0",
     "transformers>=4.40",
+    "sentence-transformers>=3.0",
+    "torch==2.8.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
+    "pgvector>=0.3",
+    "pydantic-settings>=2.4",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
     "ruff>=0.6",
 ]
@@ -23,7 +31,9 @@ package = false
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
 addopts = "-ra"
-markers = ["integration: tests that require downloaded real data"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: tests that require downloaded real data or PostgreSQL"]
 
 [tool.ruff]
 line-length = 100
