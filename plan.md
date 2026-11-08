@@ -1523,3 +1523,2139 @@ git commit -m "docs: complete block 2 embeddings and dense retrieval"
 Block 3 should add BM25, hybrid retrieval, and Reciprocal Rank Fusion over the same
 document/chunk tables, using the Block 2 dense-retrieval metrics as a comparison point.
 Do not start Block 3 until Block 2 verification is complete.
+
+---
+
+## Block 3 Implementation Plan — Lexical and Hybrid Retrieval
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Add PostgreSQL full-text lexical retrieval, hybrid retrieval with Reciprocal
+Rank Fusion, and a development-split comparison against the Block 2 dense baseline.
+
+**Architecture:** A generated `search_vector` column and GIN index make PostgreSQL FTS
+available directly on the chunk table. A leakage-safe `LexicalRetriever` returns chunks
+ranked by `ts_rank_cd`. A `HybridRetriever` retrieves candidate lists from dense and
+lexical retrieval and fuses them with RRF. A unified development evaluator reports
+dense, lexical, and hybrid metrics without touching the holdout split.
+
+**Tech Stack:** Python 3.12, `uv`, PostgreSQL 16, pgvector, SQLAlchemy 2 async,
+asyncpg, Alembic, sentence-transformers, PyTorch, pytest-asyncio, Ruff.
+
+**Status:** planned. Do not start Block 3 implementation until the Block 2 verification
+is committed and the plan below is approved.
+
+### Global Constraints
+
+- Use PostgreSQL FTS as the lexical baseline. Do **not** call it exact BM25.
+- Use `websearch_to_tsquery('english', query)` and `ts_rank_cd(..., 32)`.
+- Weight title as `A` and content as `B` in the generated `search_vector`.
+- Keep tenant and knowledge-base filters mandatory on every retrieval query.
+- `source_types` may be a user-selected product filter; evaluation metadata may not be
+  passed to any retriever.
+- Never pass `expected_doc_ids`, `question_type`, `gold_answer`, or evaluation
+  `source_types` to a retriever-shaped interface.
+- Use RRF with `k=60`, dense weight `1.0`, lexical weight `1.0`, and candidate depth
+  `50` unless development evaluation justifies a documented change.
+- Use only the 169 development questions. Do not run or tune on the 42 holdout
+  questions.
+- Do not add exact BM25 libraries, rerankers, generation, FastAPI, or full evaluation
+  harnesses in this block.
+- Do not commit raw or processed data, query embeddings, evaluation reports, or model
+  caches.
+- Run `uv run pytest`, database integration tests, Ruff, and formatting checks before
+  claiming completion.
+
+### File Structure
+
+| File | Responsibility |
+|---|---|
+| `backend/app/retrieval/types.py` | Shared `RetrievedChunk` result type |
+| `backend/app/retrieval/fusion.py` | Reciprocal Rank Fusion |
+| `backend/app/retrieval/lexical.py` | PostgreSQL FTS retriever |
+| `backend/app/retrieval/hybrid.py` | Dense + lexical candidate fusion |
+| `backend/app/db/models.py` | `search_vector` generated column and GIN index |
+| `backend/app/db/repositories.py` | SQL for lexical search |
+| `backend/alembic/versions/0002_add_lexical_search.py` | Schema migration |
+| `backend/app/evaluation/dev.py` | Shared dev-question loading and metrics |
+| `scripts/lexical_search.py` | Lexical query CLI |
+| `scripts/hybrid_search.py` | Hybrid query CLI |
+| `scripts/eval_retrieval_dev.py` | Dense/lexical/hybrid dev evaluation |
+| `docs/architecture/hybrid-retrieval.md` | Block 3 design and measured results |
+| `docs/design-decisions/0003-lexical-backend-and-fusion.md` | Accepted decisions |
+
+---
+
+### Task 1: Shared Retrieval Types and RRF
+
+**Files:**
+- Create: `backend/app/retrieval/types.py`
+- Create: `backend/app/retrieval/fusion.py`
+- Modify: `backend/app/retrieval/dense.py`
+- Modify: `backend/app/retrieval/__init__.py`
+- Create: `backend/tests/unit/test_fusion.py`
+
+**Interfaces:**
+- Consumes: nothing from earlier Block 3 tasks.
+- Produces:
+  - `RetrievedChunk(chunk_id: str, doc_id: str, source_type: str, title: str, chunk_index: int, content: str, score: float, metadata: dict[str, Any])`
+  - `reciprocal_rank_fusion(rankings: Sequence[Sequence[RetrievedChunk]], *, k: int = 60, weights: Sequence[float] | None = None) -> list[RetrievedChunk]`
+
+- [ ] **Step 1: Write the failing fusion tests**
+
+Create `backend/tests/unit/test_fusion.py`:
+
+```python
+"""Tests for Reciprocal Rank Fusion."""
+
+from __future__ import annotations
+
+import pytest
+
+from app.retrieval.fusion import reciprocal_rank_fusion
+from app.retrieval.types import RetrievedChunk
+
+
+def _chunk(chunk_id: str, score: float = 0.0) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id,
+        doc_id=f"doc-{chunk_id}",
+        source_type="confluence",
+        title="Title",
+        chunk_index=0,
+        content="content",
+        score=score,
+        metadata={},
+    )
+
+
+def test_rrf_combines_overlapping_rankings() -> None:
+    fused = reciprocal_rank_fusion(
+        [[_chunk("a"), _chunk("b")], [_chunk("b"), _chunk("c")]],
+        k=60,
+    )
+
+    assert [chunk.chunk_id for chunk in fused] == ["b", "a", "c"]
+    assert fused[0].score == pytest.approx(1 / 62 + 1 / 61)
+
+
+def test_rrf_honors_weights() -> None:
+    fused = reciprocal_rank_fusion(
+        [[_chunk("a"), _chunk("b")], [_chunk("b"), _chunk("c")]],
+        k=60,
+        weights=[2.0, 1.0],
+    )
+
+    assert [chunk.chunk_id for chunk in fused] == ["b", "a", "c"]
+
+
+def test_rrf_counts_a_chunk_once_per_ranking() -> None:
+    fused = reciprocal_rank_fusion(
+        [[_chunk("a"), _chunk("a"), _chunk("b")]],
+        k=60,
+    )
+
+    assert [chunk.chunk_id for chunk in fused] == ["a", "b"]
+    assert fused[0].score == pytest.approx(1 / 61)
+
+
+def test_rrf_is_deterministic_on_ties() -> None:
+    fused = reciprocal_rank_fusion([[_chunk("b")], [_chunk("a")]], k=60)
+
+    assert [chunk.chunk_id for chunk in fused] == ["a", "b"]
+
+
+def test_rrf_rejects_invalid_arguments() -> None:
+    with pytest.raises(ValueError, match="k"):
+        reciprocal_rank_fusion([[_chunk("a")]], k=0)
+    with pytest.raises(ValueError, match="weights"):
+        reciprocal_rank_fusion([[_chunk("a")]], weights=[1.0, 2.0])
+    with pytest.raises(ValueError, match="weights"):
+        reciprocal_rank_fusion([[_chunk("a")]], weights=[-1.0])
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_fusion.py -q
+```
+
+Expected: FAIL because `app.retrieval.types` and `app.retrieval.fusion` do not exist.
+
+- [ ] **Step 3: Add the shared result type**
+
+Create `backend/app/retrieval/types.py`:
+
+```python
+"""Shared retrieval result types."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class RetrievedChunk:
+    """A chunk returned by a retrieval strategy."""
+
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content: str
+    score: float
+    metadata: dict[str, Any]
+```
+
+- [ ] **Step 4: Implement RRF**
+
+Create `backend/app/retrieval/fusion.py`:
+
+```python
+"""Reciprocal Rank Fusion across retrieval strategies."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import replace
+
+from app.retrieval.types import RetrievedChunk
+
+
+def reciprocal_rank_fusion(
+    rankings: Sequence[Sequence[RetrievedChunk]],
+    *,
+    k: int = 60,
+    weights: Sequence[float] | None = None,
+) -> list[RetrievedChunk]:
+    """Fuse ranked result lists using Reciprocal Rank Fusion."""
+
+    if k <= 0:
+        raise ValueError("k must be positive")
+    resolved_weights = list(weights) if weights is not None else [1.0] * len(rankings)
+    if len(resolved_weights) != len(rankings):
+        raise ValueError("weights must match the number of rankings")
+    if any(weight < 0 for weight in resolved_weights):
+        raise ValueError("weights must be non-negative")
+
+    scores: dict[str, float] = {}
+    best_rank: dict[str, int] = {}
+    chunks: dict[str, RetrievedChunk] = {}
+
+    for ranking, weight in zip(rankings, resolved_weights, strict=True):
+        if weight == 0:
+            continue
+        seen: set[str] = set()
+        for rank, chunk in enumerate(ranking, start=1):
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            chunks.setdefault(chunk.chunk_id, chunk)
+            scores[chunk.chunk_id] = scores.get(chunk.chunk_id, 0.0) + weight / (k + rank)
+            best_rank[chunk.chunk_id] = min(best_rank.get(chunk.chunk_id, rank), rank)
+
+    fused = [
+        replace(chunks[chunk_id], score=scores[chunk_id])
+        for chunk_id in scores
+    ]
+    fused.sort(key=lambda chunk: (-chunk.score, best_rank[chunk.chunk_id], chunk.chunk_id))
+    return fused
+```
+
+- [ ] **Step 5: Update dense retrieval to use the shared type**
+
+In `backend/app/retrieval/dense.py`, remove the local `RetrievedChunk` dataclass,
+remove the now-unused `from dataclasses import dataclass` import, and add:
+
+```python
+from app.retrieval.types import RetrievedChunk
+```
+
+Keep `DenseRetriever` and its behavior unchanged.
+
+Update `backend/app/retrieval/__init__.py`:
+
+```python
+"""Retrieval interfaces and metrics."""
+
+from app.retrieval.dense import DenseRetriever
+from app.retrieval.types import RetrievedChunk
+
+__all__ = ["DenseRetriever", "RetrievedChunk"]
+```
+
+- [ ] **Step 6: Run the tests and verify they pass**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_fusion.py backend/tests/unit/test_dense_retriever.py -q
+uv run ruff check backend/app/retrieval backend/tests/unit/test_fusion.py
+uv run ruff format --check backend/app/retrieval backend/tests/unit/test_fusion.py
+```
+
+Expected: PASS and no lint errors.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/retrieval/types.py backend/app/retrieval/fusion.py \
+  backend/app/retrieval/dense.py backend/app/retrieval/__init__.py \
+  backend/tests/unit/test_fusion.py
+git commit -m "feat: add shared retrieval types and RRF fusion"
+```
+
+---
+
+### Task 2: Lexical Search Schema
+
+**Files:**
+- Modify: `backend/app/db/models.py`
+- Create: `backend/alembic/versions/0002_add_lexical_search.py`
+- Modify: `backend/tests/integration/test_database.py`
+
+**Interfaces:**
+- Consumes: existing `ChunkRecord` model and Alembic `0001`.
+- Produces:
+  - `ChunkRecord.search_vector` generated `tsvector` column.
+  - Index `ix_chunks_search_vector` using GIN.
+
+- [ ] **Step 1: Write the failing schema test**
+
+Add this test to `backend/tests/integration/test_database.py`:
+
+```python
+async def test_lexical_search_schema_exists(session) -> None:
+    generated = await session.scalar(
+        text(
+            "SELECT is_generated FROM information_schema.columns "
+            "WHERE table_name = 'chunks' AND column_name = 'search_vector'"
+        )
+    )
+    index = await session.scalar(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'chunks' AND indexname = 'ix_chunks_search_vector'"
+        )
+    )
+
+    assert generated == "ALWAYS"
+    assert index == "ix_chunks_search_vector"
+```
+
+- [ ] **Step 2: Run the test and verify it fails**
+
+Run:
+
+```bash
+uv run pytest backend/tests/integration/test_database.py::test_lexical_search_schema_exists -q
+```
+
+Expected: FAIL because `search_vector` and the GIN index do not exist.
+
+- [ ] **Step 3: Add the generated column and GIN index to the model**
+
+In `backend/app/db/models.py`, import `Computed` and `TSVECTOR`:
+
+```python
+from sqlalchemy import (
+    Computed,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+```
+
+Add a module constant near `EMBEDDING_DIMENSION`:
+
+```python
+SEARCH_VECTOR_EXPRESSION = (
+    "setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') || "
+    "setweight(to_tsvector('english'::regconfig, coalesce(content, '')), 'B')"
+)
+```
+
+Add the index to `ChunkRecord.__table_args__`:
+
+```python
+Index(
+    "ix_chunks_search_vector",
+    "search_vector",
+    postgresql_using="gin",
+),
+```
+
+Add the column after `content`:
+
+```python
+search_vector: Mapped[str | None] = mapped_column(
+    TSVECTOR,
+    Computed(SEARCH_VECTOR_EXPRESSION, persisted=True),
+    nullable=True,
+)
+```
+
+- [ ] **Step 4: Add the migration**
+
+Create `backend/alembic/versions/0002_add_lexical_search.py`:
+
+```python
+"""Add generated lexical search vector and GIN index.
+
+Revision ID: 0002
+Revises: 0001
+Create Date: 2026-11-08
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision: str = "0002"
+down_revision: str | None = "0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+SEARCH_VECTOR_EXPRESSION = (
+    "setweight(to_tsvector('english'::regconfig, coalesce(title, '')), 'A') || "
+    "setweight(to_tsvector('english'::regconfig, coalesce(content, '')), 'B')"
+)
+
+
+def upgrade() -> None:
+    op.add_column(
+        "chunks",
+        sa.Column(
+            "search_vector",
+            postgresql.TSVECTOR(),
+            sa.Computed(SEARCH_VECTOR_EXPRESSION, persisted=True),
+            nullable=True,
+        ),
+    )
+    op.create_index(
+        "ix_chunks_search_vector",
+        "chunks",
+        ["search_vector"],
+        unique=False,
+        postgresql_using="gin",
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_chunks_search_vector", table_name="chunks")
+    op.drop_column("chunks", "search_vector")
+```
+
+- [ ] **Step 5: Apply the migration**
+
+Run:
+
+```bash
+docker compose up -d db
+uv run alembic -c backend/alembic.ini upgrade head
+```
+
+Expected: migration `0002` applies without error.
+
+- [ ] **Step 6: Run the schema test and verify it passes**
+
+Run:
+
+```bash
+uv run pytest backend/tests/integration/test_database.py::test_lexical_search_schema_exists -q
+```
+
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/db/models.py backend/alembic/versions/0002_add_lexical_search.py \
+  backend/tests/integration/test_database.py
+git commit -m "feat: add lexical search schema"
+```
+
+---
+
+### Task 3: Lexical Repository Query
+
+**Files:**
+- Modify: `backend/app/db/repositories.py`
+- Create: `backend/tests/integration/test_lexical_retrieval.py`
+
+**Interfaces:**
+- Consumes: `ChunkRecord.search_vector`, `DocumentUpsert`, `ChunkUpsert`, `upsert_documents`, `upsert_chunks`.
+- Produces:
+  - `LexicalSearchResult(chunk: ChunkRecord, rank: float)`
+  - `search_chunks_lexical(session, query, *, tenant_id, knowledge_base_id, top_k=10, source_types=None) -> list[LexicalSearchResult]`
+
+- [ ] **Step 1: Write the failing lexical repository test**
+
+Create `backend/tests/integration/test_lexical_retrieval.py`:
+
+```python
+"""Integration tests for PostgreSQL lexical retrieval."""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.db.repositories import (
+    ChunkUpsert,
+    DocumentUpsert,
+    search_chunks_lexical,
+    upsert_chunks,
+    upsert_documents,
+)
+from app.settings import Settings
+
+pytestmark = pytest.mark.integration
+
+
+@pytest_asyncio.fixture
+async def session_factory():
+    engine = create_async_engine(Settings().database_url)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1 FROM documents LIMIT 1"))
+            await connection.execute(text("SELECT 1 FROM chunks LIMIT 1"))
+    except Exception as exc:
+        await engine.dispose()
+        pytest.skip(f"PostgreSQL schema unavailable: {exc}")
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+async def _seed_chunk(
+    session,
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    doc_id: str,
+    content: str,
+    title: str,
+    source_type: str,
+) -> None:
+    document = DocumentUpsert(
+        tenant_id=tenant_id,
+        knowledge_base_id=knowledge_base_id,
+        doc_id=doc_id,
+        source_type=source_type,
+        title=title,
+        content_hash="a" * 64,
+    )
+    document_id = (await upsert_documents(session, [document]))[
+        (document.source_type, document.doc_id, document.content_hash)
+    ]
+    await upsert_chunks(
+        session,
+        [
+            ChunkUpsert(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                document_id=document_id,
+                doc_id=doc_id,
+                chunk_id=f"{doc_id}:0:abc",
+                chunk_index=0,
+                content=content,
+                token_count=len(content.split()),
+                start_char=0,
+                end_char=len(content),
+                content_hash="b" * 64,
+                source_type=source_type,
+                title=title,
+                embedding=None,
+                embedding_model=None,
+            )
+        ],
+    )
+    await session.commit()
+
+
+async def test_lexical_search_orders_by_rank(session_factory) -> None:
+    tenant_id = uuid.uuid4()
+    knowledge_base_id = uuid.uuid4()
+    async with session_factory() as session:
+        await _seed_chunk(
+            session,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            doc_id="doc-alpha",
+            content="alpha beta gamma",
+            title="Alpha guide",
+            source_type="confluence",
+        )
+        await _seed_chunk(
+            session,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            doc_id="doc-delta",
+            content="delta epsilon",
+            title="Delta guide",
+            source_type="confluence",
+        )
+
+    async with session_factory() as session:
+        results = await search_chunks_lexical(
+            session,
+            "alpha",
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            top_k=5,
+        )
+
+    assert [result.chunk.doc_id for result in results] == ["doc-alpha"]
+    assert results[0].rank > 0
+
+
+async def test_lexical_search_honors_source_filter(session_factory) -> None:
+    tenant_id = uuid.uuid4()
+    knowledge_base_id = uuid.uuid4()
+    async with session_factory() as session:
+        await _seed_chunk(
+            session,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            doc_id="doc-confluence",
+            content="rotation policy",
+            title="Rotation",
+            source_type="confluence",
+        )
+        await _seed_chunk(
+            session,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            doc_id="doc-github",
+            content="rotation policy",
+            title="Rotation",
+            source_type="github",
+        )
+
+    async with session_factory() as session:
+        results = await search_chunks_lexical(
+            session,
+            "rotation",
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            top_k=5,
+            source_types=["github"],
+        )
+
+    assert [result.chunk.doc_id for result in results] == ["doc-github"]
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```bash
+uv run pytest backend/tests/integration/test_lexical_retrieval.py -q
+```
+
+Expected: FAIL because `search_chunks_lexical` and `LexicalSearchResult` do not exist.
+
+- [ ] **Step 3: Add the result type and query**
+
+In `backend/app/db/repositories.py`, add after `ChunkSearchResult`:
+
+```python
+@dataclass(frozen=True)
+class LexicalSearchResult:
+    chunk: ChunkRecord
+    rank: float
+```
+
+Add after `search_chunks`:
+
+```python
+async def search_chunks_lexical(
+    session: AsyncSession,
+    query: str,
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    top_k: int = 10,
+    source_types: Sequence[str] | None = None,
+) -> list[LexicalSearchResult]:
+    """Return chunks ranked by PostgreSQL full-text search."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if not query.strip():
+        return []
+
+    tsquery = func.websearch_to_tsquery("english", query)
+    rank = func.ts_rank_cd(ChunkRecord.search_vector, tsquery, 32).label("rank")
+    statement = (
+        select(ChunkRecord, rank)
+        .where(
+            ChunkRecord.tenant_id == tenant_id,
+            ChunkRecord.knowledge_base_id == knowledge_base_id,
+            ChunkRecord.search_vector.op("@@")(tsquery),
+        )
+        .order_by(rank.desc(), ChunkRecord.chunk_id.asc())
+        .limit(top_k)
+    )
+    if source_types:
+        statement = statement.where(ChunkRecord.source_type.in_(list(source_types)))
+
+    rows = (await session.execute(statement)).all()
+    return [
+        LexicalSearchResult(chunk=row[0], rank=float(row[1]))
+        for row in rows
+    ]
+```
+
+- [ ] **Step 4: Run the integration tests and verify they pass**
+
+Run:
+
+```bash
+uv run pytest backend/tests/integration/test_lexical_retrieval.py -q
+uv run ruff check backend/app/db/repositories.py backend/tests/integration/test_lexical_retrieval.py
+uv run ruff format --check backend/app/db/repositories.py backend/tests/integration/test_lexical_retrieval.py
+```
+
+Expected: PASS and no lint errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/db/repositories.py backend/tests/integration/test_lexical_retrieval.py
+git commit -m "feat: add lexical search repository query"
+```
+
+---
+
+### Task 4: Lexical Retriever
+
+**Files:**
+- Create: `backend/app/retrieval/lexical.py`
+- Modify: `backend/app/retrieval/__init__.py`
+- Create: `backend/tests/unit/test_lexical_retriever.py`
+
+**Interfaces:**
+- Consumes: `search_chunks_lexical` from Task 3 and `RetrievedChunk` from Task 1.
+- Produces:
+  - `LexicalRetriever(session_factory, *, tenant_id, knowledge_base_id)`
+  - `LexicalRetriever.retrieve(query, *, top_k=10, source_types=None) -> list[RetrievedChunk]`
+
+- [ ] **Step 1: Write the failing unit tests**
+
+Create `backend/tests/unit/test_lexical_retriever.py`:
+
+```python
+"""Tests for the lexical retriever boundary."""
+
+from __future__ import annotations
+
+import inspect
+import uuid
+from types import SimpleNamespace
+
+import pytest
+
+from app.db.repositories import LexicalSearchResult
+from app.retrieval.lexical import LexicalRetriever
+
+
+class FakeSession:
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _session_factory() -> FakeSession:
+    return FakeSession()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_maps_lexical_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    chunk = SimpleNamespace(
+        chunk_id="chunk-1",
+        doc_id="doc-1",
+        source_type="confluence",
+        title="Title",
+        chunk_index=2,
+        content="content",
+        doc_metadata={"origin": "test"},
+    )
+    calls: list[tuple[object, str, dict[str, object]]] = []
+
+    async def fake_search(session: object, query: str, **kwargs: object):
+        calls.append((session, query, kwargs))
+        return [LexicalSearchResult(chunk=chunk, rank=0.75)]
+
+    monkeypatch.setattr("app.retrieval.lexical.search_chunks_lexical", fake_search)
+    retriever = LexicalRetriever(
+        _session_factory,
+        tenant_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        knowledge_base_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+    )
+
+    results = await retriever.retrieve("query", top_k=3, source_types=["confluence"])
+
+    assert len(results) == 1
+    assert results[0].chunk_id == "chunk-1"
+    assert results[0].score == 0.75
+    assert results[0].metadata == {"origin": "test"}
+    _, query, kwargs = calls[0]
+    assert query == "query"
+    assert kwargs["top_k"] == 3
+    assert kwargs["source_types"] == ["confluence"]
+
+
+@pytest.mark.asyncio
+async def test_empty_query_does_not_query_database() -> None:
+    retriever = LexicalRetriever(
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    assert await retriever.retrieve("   ") == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_top_k_is_rejected() -> None:
+    retriever = LexicalRetriever(
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="top_k"):
+        await retriever.retrieve("query", top_k=0)
+
+
+def test_retriever_does_not_expose_evaluation_metadata() -> None:
+    parameters = inspect.signature(LexicalRetriever.retrieve).parameters
+
+    for name in ("expected_doc_ids", "question_type", "gold_answer", "source_types_expected"):
+        assert name not in parameters
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_lexical_retriever.py -q
+```
+
+Expected: FAIL because `app.retrieval.lexical` does not exist.
+
+- [ ] **Step 3: Implement the retriever**
+
+Create `backend/app/retrieval/lexical.py`:
+
+```python
+"""Lexical retrieval over PostgreSQL full-text search."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Sequence
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db.repositories import search_chunks_lexical
+from app.retrieval.types import RetrievedChunk
+
+
+class LexicalRetriever:
+    """Run a PostgreSQL full-text query and return ranked chunks."""
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        tenant_id: uuid.UUID,
+        knowledge_base_id: uuid.UUID,
+    ) -> None:
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+        self.knowledge_base_id = knowledge_base_id
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Retrieve chunks using only user-provided inputs."""
+
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if not query.strip():
+            return []
+
+        async with self.session_factory() as session:
+            results = await search_chunks_lexical(
+                session,
+                query,
+                tenant_id=self.tenant_id,
+                knowledge_base_id=self.knowledge_base_id,
+                top_k=top_k,
+                source_types=source_types,
+            )
+
+        return [
+            RetrievedChunk(
+                chunk_id=result.chunk.chunk_id,
+                doc_id=result.chunk.doc_id,
+                source_type=result.chunk.source_type,
+                title=result.chunk.title,
+                chunk_index=result.chunk.chunk_index,
+                content=result.chunk.content,
+                score=result.rank,
+                metadata=result.chunk.doc_metadata,
+            )
+            for result in results
+        ]
+```
+
+Update `backend/app/retrieval/__init__.py`:
+
+```python
+"""Retrieval interfaces and metrics."""
+
+from app.retrieval.dense import DenseRetriever
+from app.retrieval.lexical import LexicalRetriever
+from app.retrieval.types import RetrievedChunk
+
+__all__ = ["DenseRetriever", "LexicalRetriever", "RetrievedChunk"]
+```
+
+- [ ] **Step 4: Run the tests and verify they pass**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_lexical_retriever.py -q
+uv run ruff check backend/app/retrieval/lexical.py backend/app/retrieval/__init__.py \
+  backend/tests/unit/test_lexical_retriever.py
+uv run ruff format --check backend/app/retrieval/lexical.py \
+  backend/tests/unit/test_lexical_retriever.py
+```
+
+Expected: PASS and no lint errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/retrieval/lexical.py backend/app/retrieval/__init__.py \
+  backend/tests/unit/test_lexical_retriever.py
+git commit -m "feat: add lexical retriever"
+```
+
+---
+
+### Task 5: Hybrid Retriever
+
+**Files:**
+- Create: `backend/app/retrieval/hybrid.py`
+- Modify: `backend/app/retrieval/__init__.py`
+- Create: `backend/tests/unit/test_hybrid_retriever.py`
+
+**Interfaces:**
+- Consumes: `DenseRetriever`, `LexicalRetriever`, `RetrievedChunk`, and `reciprocal_rank_fusion`.
+- Produces:
+  - `HybridRetriever(dense_retriever, lexical_retriever, *, rrf_k=60, dense_weight=1.0, lexical_weight=1.0, candidate_k=50)`
+  - `HybridRetriever.retrieve(query, *, top_k=10, source_types=None) -> list[RetrievedChunk]`
+
+- [ ] **Step 1: Write the failing unit tests**
+
+Create `backend/tests/unit/test_hybrid_retriever.py`:
+
+```python
+"""Tests for hybrid retrieval and RRF integration."""
+
+from __future__ import annotations
+
+import inspect
+import uuid
+
+import pytest
+
+from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.types import RetrievedChunk
+
+
+class FakeRetriever:
+    def __init__(self, chunks: list[RetrievedChunk]) -> None:
+        self.chunks = chunks
+        self.calls: list[dict[str, object]] = []
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: list[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        self.calls.append(
+            {"query": query, "top_k": top_k, "source_types": source_types}
+        )
+        return self.chunks[:top_k]
+
+
+def _chunk(chunk_id: str) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk_id,
+        doc_id=f"doc-{chunk_id}",
+        source_type="github",
+        title="Title",
+        chunk_index=0,
+        content="content",
+        score=0.0,
+        metadata={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_hybrid_fuses_and_slices_results() -> None:
+    dense = FakeRetriever([_chunk("a"), _chunk("b")])
+    lexical = FakeRetriever([_chunk("b"), _chunk("c")])
+    retriever = HybridRetriever(
+        dense,
+        lexical,
+        rrf_k=60,
+        candidate_k=2,
+    )
+
+    results = await retriever.retrieve("query", top_k=2, source_types=["github"])
+
+    assert [result.chunk_id for result in results] == ["b", "a"]
+    assert dense.calls[0]["top_k"] == 2
+    assert lexical.calls[0]["top_k"] == 2
+    assert dense.calls[0]["source_types"] == ["github"]
+    assert lexical.calls[0]["source_types"] == ["github"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_k_expands_to_top_k() -> None:
+    dense = FakeRetriever([_chunk("a")])
+    lexical = FakeRetriever([_chunk("b")])
+    retriever = HybridRetriever(dense, lexical, candidate_k=1)
+
+    await retriever.retrieve("query", top_k=5)
+
+    assert dense.calls[0]["top_k"] == 5
+    assert lexical.calls[0]["top_k"] == 5
+
+
+@pytest.mark.asyncio
+async def test_empty_query_does_not_call_retrievers() -> None:
+    dense = FakeRetriever([])
+    lexical = FakeRetriever([])
+    retriever = HybridRetriever(dense, lexical)
+
+    assert await retriever.retrieve("   ") == []
+    assert dense.calls == []
+    assert lexical.calls == []
+
+
+def test_hybrid_rejects_invalid_parameters() -> None:
+    dense = FakeRetriever([])
+    lexical = FakeRetriever([])
+
+    with pytest.raises(ValueError, match="rrf_k"):
+        HybridRetriever(dense, lexical, rrf_k=0)
+    with pytest.raises(ValueError, match="candidate_k"):
+        HybridRetriever(dense, lexical, candidate_k=0)
+    with pytest.raises(ValueError, match="weights"):
+        HybridRetriever(dense, lexical, dense_weight=-1.0)
+
+
+def test_retriever_does_not_expose_evaluation_metadata() -> None:
+    parameters = inspect.signature(HybridRetriever.retrieve).parameters
+
+    for name in ("expected_doc_ids", "question_type", "gold_answer", "source_types_expected"):
+        assert name not in parameters
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_hybrid_retriever.py -q
+```
+
+Expected: FAIL because `app.retrieval.hybrid` does not exist.
+
+- [ ] **Step 3: Implement the hybrid retriever**
+
+Create `backend/app/retrieval/hybrid.py`:
+
+```python
+"""Hybrid retrieval using RRF over dense and lexical candidates."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Sequence
+
+from app.retrieval.dense import DenseRetriever
+from app.retrieval.fusion import reciprocal_rank_fusion
+from app.retrieval.lexical import LexicalRetriever
+from app.retrieval.types import RetrievedChunk
+
+
+class HybridRetriever:
+    """Fuse dense and lexical rankings with Reciprocal Rank Fusion."""
+
+    def __init__(
+        self,
+        dense_retriever: DenseRetriever,
+        lexical_retriever: LexicalRetriever,
+        *,
+        rrf_k: int = 60,
+        dense_weight: float = 1.0,
+        lexical_weight: float = 1.0,
+        candidate_k: int = 50,
+    ) -> None:
+        if rrf_k <= 0:
+            raise ValueError("rrf_k must be positive")
+        if candidate_k <= 0:
+            raise ValueError("candidate_k must be positive")
+        if dense_weight < 0 or lexical_weight < 0:
+            raise ValueError("weights must be non-negative")
+
+        self.dense_retriever = dense_retriever
+        self.lexical_retriever = lexical_retriever
+        self.rrf_k = rrf_k
+        self.dense_weight = dense_weight
+        self.lexical_weight = lexical_weight
+        self.candidate_k = candidate_k
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        """Retrieve and fuse dense and lexical results."""
+
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if not query.strip():
+            return []
+
+        candidate_k = max(self.candidate_k, top_k)
+        dense_results, lexical_results = await asyncio.gather(
+            self.dense_retriever.retrieve(
+                query,
+                top_k=candidate_k,
+                source_types=source_types,
+            ),
+            self.lexical_retriever.retrieve(
+                query,
+                top_k=candidate_k,
+                source_types=source_types,
+            ),
+        )
+        fused = reciprocal_rank_fusion(
+            [dense_results, lexical_results],
+            k=self.rrf_k,
+            weights=[self.dense_weight, self.lexical_weight],
+        )
+        return fused[:top_k]
+```
+
+Update `backend/app/retrieval/__init__.py`:
+
+```python
+"""Retrieval interfaces and metrics."""
+
+from app.retrieval.dense import DenseRetriever
+from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.lexical import LexicalRetriever
+from app.retrieval.types import RetrievedChunk
+
+__all__ = ["DenseRetriever", "HybridRetriever", "LexicalRetriever", "RetrievedChunk"]
+```
+
+- [ ] **Step 4: Run the tests and verify they pass**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_hybrid_retriever.py -q
+uv run ruff check backend/app/retrieval/hybrid.py backend/app/retrieval/__init__.py \
+  backend/tests/unit/test_hybrid_retriever.py
+uv run ruff format --check backend/app/retrieval/hybrid.py \
+  backend/tests/unit/test_hybrid_retriever.py
+```
+
+Expected: PASS and no lint errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/retrieval/hybrid.py backend/app/retrieval/__init__.py \
+  backend/tests/unit/test_hybrid_retriever.py
+git commit -m "feat: add hybrid retriever with RRF"
+```
+
+---
+
+### Task 6: Lexical Search CLI
+
+**Files:**
+- Create: `scripts/lexical_search.py`
+
+**Interfaces:**
+- Consumes: `LexicalRetriever`, `Settings`, database session factory.
+- Produces: a CLI that prints ranked lexical results or JSON.
+
+- [ ] **Step 1: Implement the CLI**
+
+Create `scripts/lexical_search.py`:
+
+```python
+#!/usr/bin/env python3
+"""Run a PostgreSQL full-text query from the command line."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import uuid
+from dataclasses import asdict
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+
+from app.db.session import build_engine, build_session_factory  # noqa: E402
+from app.ingestion.loaders.base import SOURCE_TYPES  # noqa: E402
+from app.retrieval.lexical import LexicalRetriever  # noqa: E402
+from app.settings import Settings, get_settings  # noqa: E402
+
+
+def build_parser() -> argparse.ArgumentParser:
+    settings = get_settings()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("query")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--source-types", nargs="+", choices=sorted(SOURCE_TYPES))
+    parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
+    parser.add_argument(
+        "--knowledge-base-id",
+        type=uuid.UUID,
+        default=settings.default_knowledge_base_id,
+    )
+    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    return parser
+
+
+async def run(args: argparse.Namespace, settings: Settings) -> int:
+    engine = build_engine(settings)
+    session_factory = build_session_factory(engine)
+    try:
+        retriever = LexicalRetriever(
+            session_factory,
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        results = await retriever.retrieve(
+            args.query,
+            top_k=args.top_k,
+            source_types=args.source_types,
+        )
+    finally:
+        await engine.dispose()
+
+    if args.json:
+        print(json.dumps([asdict(result) for result in results], indent=2, ensure_ascii=False))
+        return 0
+
+    if not results:
+        print("No results.")
+        return 0
+
+    for rank, result in enumerate(results, start=1):
+        preview = " ".join(result.content.split())[:220]
+        print(
+            f"{rank}. rank={result.score:.6f} doc={result.doc_id} "
+            f"chunk={result.chunk_id} source={result.source_type}"
+        )
+        print(f"   {result.title}")
+        print(f"   {preview}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    settings = get_settings()
+    try:
+        return asyncio.run(run(args, settings))
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [ ] **Step 2: Smoke-test the CLI**
+
+Run:
+
+```bash
+uv run python scripts/lexical_search.py --help
+uv run python scripts/lexical_search.py "How do I rotate an API key?" --top-k 3
+```
+
+Expected: the first command prints help; the second prints ranked results with
+`rank=...` scores.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/lexical_search.py
+git commit -m "feat: add lexical search CLI"
+```
+
+---
+
+### Task 7: Hybrid Search CLI
+
+**Files:**
+- Create: `scripts/hybrid_search.py`
+
+**Interfaces:**
+- Consumes: `DenseRetriever`, `LexicalRetriever`, `HybridRetriever`, `BGEEmbeddingProvider`.
+- Produces: a CLI that prints fused results or JSON.
+
+- [ ] **Step 1: Implement the CLI**
+
+Create `scripts/hybrid_search.py`:
+
+```python
+#!/usr/bin/env python3
+"""Run a hybrid dense + lexical query from the command line."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import uuid
+from dataclasses import asdict
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+
+from app.db.session import build_engine, build_session_factory  # noqa: E402
+from app.embeddings.bge import BGEEmbeddingProvider  # noqa: E402
+from app.ingestion.loaders.base import SOURCE_TYPES  # noqa: E402
+from app.retrieval.dense import DenseRetriever  # noqa: E402
+from app.retrieval.hybrid import HybridRetriever  # noqa: E402
+from app.retrieval.lexical import LexicalRetriever  # noqa: E402
+from app.settings import Settings, get_settings  # noqa: E402
+
+
+def build_parser() -> argparse.ArgumentParser:
+    settings = get_settings()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("query")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--candidate-k", type=int, default=50)
+    parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument("--dense-weight", type=float, default=1.0)
+    parser.add_argument("--lexical-weight", type=float, default=1.0)
+    parser.add_argument("--source-types", nargs="+", choices=sorted(SOURCE_TYPES))
+    parser.add_argument("--device", default=settings.embedding_device)
+    parser.add_argument("--dtype", default=settings.embedding_dtype, choices=["float32", "float16"])
+    parser.add_argument("--model", default=settings.embedding_model)
+    parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
+    parser.add_argument(
+        "--knowledge-base-id",
+        type=uuid.UUID,
+        default=settings.default_knowledge_base_id,
+    )
+    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    return parser
+
+
+async def run(args: argparse.Namespace, settings: Settings) -> int:
+    provider = BGEEmbeddingProvider(
+        model_name=args.model,
+        dimension=settings.embedding_dimension,
+        device=args.device,
+        batch_size=settings.embedding_batch_size,
+        dtype=args.dtype,
+        query_instruction=settings.embedding_query_instruction,
+    )
+    engine = build_engine(settings)
+    session_factory = build_session_factory(engine)
+    try:
+        dense = DenseRetriever(
+            provider,
+            session_factory,
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        lexical = LexicalRetriever(
+            session_factory,
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        retriever = HybridRetriever(
+            dense,
+            lexical,
+            rrf_k=args.rrf_k,
+            dense_weight=args.dense_weight,
+            lexical_weight=args.lexical_weight,
+            candidate_k=args.candidate_k,
+        )
+        results = await retriever.retrieve(
+            args.query,
+            top_k=args.top_k,
+            source_types=args.source_types,
+        )
+    finally:
+        await engine.dispose()
+
+    if args.json:
+        print(json.dumps([asdict(result) for result in results], indent=2, ensure_ascii=False))
+        return 0
+
+    if not results:
+        print("No results.")
+        return 0
+
+    for rank, result in enumerate(results, start=1):
+        preview = " ".join(result.content.split())[:220]
+        print(
+            f"{rank}. rrf_score={result.score:.6f} doc={result.doc_id} "
+            f"chunk={result.chunk_id} source={result.source_type}"
+        )
+        print(f"   {result.title}")
+        print(f"   {preview}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    settings = get_settings()
+    try:
+        return asyncio.run(run(args, settings))
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [ ] **Step 2: Smoke-test the CLI**
+
+Run:
+
+```bash
+uv run python scripts/hybrid_search.py --help
+uv run python scripts/hybrid_search.py "How do I rotate an API key?" \
+  --top-k 3 --device cuda --dtype float16
+```
+
+Expected: ranked fused results with `rrf_score=...`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add scripts/hybrid_search.py
+git commit -m "feat: add hybrid search CLI"
+```
+
+---
+
+### Task 8: Unified Development Evaluation
+
+**Files:**
+- Create: `backend/app/evaluation/__init__.py`
+- Create: `backend/app/evaluation/dev.py`
+- Create: `backend/tests/unit/test_dev_evaluation.py`
+- Create: `scripts/eval_retrieval_dev.py`
+
+**Interfaces:**
+- Consumes: dense, lexical, and hybrid retrievers; `evaluate_retrieval`.
+- Produces:
+  - `DevQuestion(question_id: str, question: str, expected_doc_ids: list[str])`
+  - `read_dev_questions(path: Path, limit: int | None = None) -> list[DevQuestion]`
+  - `evaluate_retriever(retriever, questions, *, top_k: int, progress_every: int = 25, label: str = "") -> dict[str, object]`
+  - CLI `scripts/eval_retrieval_dev.py` with `--mode dense|lexical|hybrid|all`.
+
+- [ ] **Step 1: Write the failing evaluation tests**
+
+Create `backend/tests/unit/test_dev_evaluation.py`:
+
+```python
+"""Tests for development-split evaluation helpers."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from app.evaluation.dev import DevQuestion, evaluate_retriever, read_dev_questions
+from app.retrieval.types import RetrievedChunk
+
+
+class FakeRetriever:
+    async def retrieve(self, query: str, *, top_k: int = 10, source_types=None):
+        return [
+            RetrievedChunk(
+                chunk_id=f"{query}-0",
+                doc_id="gold",
+                source_type="github",
+                title="Gold",
+                chunk_index=0,
+                content="content",
+                score=1.0,
+                metadata={},
+            )
+        ]
+
+
+def test_read_dev_questions_validates_and_limits(tmp_path: Path) -> None:
+    path = tmp_path / "dev.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "question_id": "q1",
+                "question": "first",
+                "expected_doc_ids": ["doc-1"],
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "question_id": "q2",
+                "question": "second",
+                "expected_doc_ids": ["doc-2"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    questions = read_dev_questions(path, limit=1)
+
+    assert questions == [
+        DevQuestion(question_id="q1", question="first", expected_doc_ids=["doc-1"])
+    ]
+
+
+def test_read_dev_questions_rejects_missing_fields(tmp_path: Path) -> None:
+    path = tmp_path / "bad.jsonl"
+    path.write_text('{"question_id": "q1"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="question"):
+        read_dev_questions(path)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_retriever_reports_metrics() -> None:
+    questions = [
+        DevQuestion(question_id="q1", question="gold", expected_doc_ids=["gold"]),
+    ]
+
+    report = await evaluate_retriever(FakeRetriever(), questions, top_k=5)
+
+    assert report["metrics"]["evaluated_questions"] == 1
+    assert report["metrics"]["recall_at_1"] == 1.0
+    assert report["metrics"]["mrr"] == 1.0
+```
+
+- [ ] **Step 2: Run the tests and verify they fail**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_dev_evaluation.py -q
+```
+
+Expected: FAIL because `app.evaluation.dev` does not exist.
+
+- [ ] **Step 3: Add the shared evaluation module**
+
+Create `backend/app/evaluation/__init__.py`:
+
+```python
+"""Evaluation helpers."""
+```
+
+Create `backend/app/evaluation/dev.py`:
+
+```python
+"""Development-split retrieval evaluation."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+from app.retrieval.metrics import DEFAULT_K_VALUES, evaluate_retrieval
+from app.retrieval.types import RetrievedChunk
+
+
+@dataclass(frozen=True)
+class DevQuestion:
+    question_id: str
+    question: str
+    expected_doc_ids: list[str]
+
+
+class RetrieverProtocol(Protocol):
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]: ...
+
+
+def read_dev_questions(path: Path, limit: int | None = None) -> list[DevQuestion]:
+    """Read and validate development questions."""
+
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be positive")
+
+    questions: list[DevQuestion] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"invalid JSON on line {line_number}") from exc
+            if not raw.get("question_id") or not raw.get("question"):
+                raise ValueError(
+                    f"question is missing question_id or question on line {line_number}"
+                )
+            questions.append(
+                DevQuestion(
+                    question_id=str(raw["question_id"]),
+                    question=str(raw["question"]),
+                    expected_doc_ids=[
+                        str(doc_id) for doc_id in raw.get("expected_doc_ids", [])
+                    ],
+                )
+            )
+            if limit is not None and len(questions) >= limit:
+                break
+    return questions
+
+
+async def evaluate_retriever(
+    retriever: RetrieverProtocol,
+    questions: Sequence[DevQuestion],
+    *,
+    top_k: int,
+    progress_every: int = 25,
+    label: str = "",
+) -> dict[str, object]:
+    """Evaluate one retriever over development questions."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if progress_every <= 0:
+        raise ValueError("progress_every must be positive")
+
+    k_values = tuple(k for k in DEFAULT_K_VALUES if k <= top_k)
+    expected_by_question: dict[str, list[str]] = {}
+    retrieved_by_question: dict[str, list[str]] = {}
+    per_question: list[dict[str, object]] = []
+
+    for index, question in enumerate(questions, start=1):
+        results = await retriever.retrieve(question.question, top_k=top_k)
+        retrieved = [result.doc_id for result in results]
+        expected_by_question[question.question_id] = question.expected_doc_ids
+        retrieved_by_question[question.question_id] = retrieved
+        per_question.append(
+            {
+                "question_id": question.question_id,
+                "expected_doc_ids": question.expected_doc_ids,
+                "retrieved_doc_ids": retrieved,
+            }
+        )
+        if index % progress_every == 0 or index == len(questions):
+            prefix = f"{label}: " if label else ""
+            print(f"{prefix}evaluated {index}/{len(questions)}", flush=True)
+
+    metrics = evaluate_retrieval(
+        expected_by_question,
+        retrieved_by_question,
+        k_values=k_values,
+    )
+    return {"metrics": metrics, "per_question": per_question}
+```
+
+- [ ] **Step 4: Add the evaluation CLI**
+
+Create `scripts/eval_retrieval_dev.py`:
+
+```python
+#!/usr/bin/env python3
+"""Evaluate dense, lexical, and hybrid retrieval on the development split."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+
+from app.db.session import build_engine, build_session_factory  # noqa: E402
+from app.embeddings.bge import BGEEmbeddingProvider  # noqa: E402
+from app.evaluation.dev import evaluate_retriever, read_dev_questions  # noqa: E402
+from app.retrieval.dense import DenseRetriever  # noqa: E402
+from app.retrieval.hybrid import HybridRetriever  # noqa: E402
+from app.retrieval.lexical import LexicalRetriever  # noqa: E402
+from app.settings import Settings, get_settings  # noqa: E402
+
+MODES = ("dense", "lexical", "hybrid")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    settings = get_settings()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=(*MODES, "all"), default="all")
+    parser.add_argument("--questions", type=Path, default=Path("data/sample/dev_questions.jsonl"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/processed/retrieval_dev_metrics.json"),
+    )
+    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--candidate-k", type=int, default=50)
+    parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument("--dense-weight", type=float, default=1.0)
+    parser.add_argument("--lexical-weight", type=float, default=1.0)
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--device", default=settings.embedding_device)
+    parser.add_argument("--dtype", default=settings.embedding_dtype, choices=["float32", "float16"])
+    parser.add_argument("--model", default=settings.embedding_model)
+    parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
+    parser.add_argument(
+        "--knowledge-base-id",
+        type=uuid.UUID,
+        default=settings.default_knowledge_base_id,
+    )
+    parser.add_argument("--progress-every", type=int, default=25)
+    return parser
+
+
+async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]:
+    if args.top_k <= 0:
+        raise ValueError("top-k must be positive")
+    if args.candidate_k <= 0:
+        raise ValueError("candidate-k must be positive")
+    if args.rrf_k <= 0:
+        raise ValueError("rrf-k must be positive")
+    if args.limit is not None and args.limit <= 0:
+        raise ValueError("limit must be positive")
+    if not args.questions.is_file():
+        raise FileNotFoundError(f"questions file not found: {args.questions}")
+
+    questions = read_dev_questions(args.questions, args.limit)
+    if not questions:
+        raise ValueError("no development questions found")
+
+    provider = None
+    if args.mode in {"dense", "hybrid"}:
+        provider = BGEEmbeddingProvider(
+            model_name=args.model,
+            dimension=settings.embedding_dimension,
+            device=args.device,
+            batch_size=settings.embedding_batch_size,
+            dtype=args.dtype,
+            query_instruction=settings.embedding_query_instruction,
+        )
+
+    engine = build_engine(settings)
+    session_factory = build_session_factory(engine)
+    try:
+        lexical = LexicalRetriever(
+            session_factory,
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        dense = None
+        if provider is not None:
+            dense = DenseRetriever(
+                provider,
+                session_factory,
+                tenant_id=args.tenant_id,
+                knowledge_base_id=args.knowledge_base_id,
+            )
+
+        retriever_by_mode = {"lexical": lexical}
+        if dense is not None:
+            retriever_by_mode["dense"] = dense
+            retriever_by_mode["hybrid"] = HybridRetriever(
+                dense,
+                lexical,
+                rrf_k=args.rrf_k,
+                dense_weight=args.dense_weight,
+                lexical_weight=args.lexical_weight,
+                candidate_k=args.candidate_k,
+            )
+
+        modes = MODES if args.mode == "all" else (args.mode,)
+        reports: dict[str, object] = {}
+        for mode in modes:
+            reports[mode] = await evaluate_retriever(
+                retriever_by_mode[mode],
+                questions,
+                top_k=args.top_k,
+                progress_every=args.progress_every,
+                label=mode,
+            )
+    finally:
+        await engine.dispose()
+
+    output: dict[str, object] = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "model": args.model,
+        "device": provider.device if provider is not None else None,
+        "dtype": provider.dtype if provider is not None else None,
+        "top_k": args.top_k,
+        "candidate_k": args.candidate_k,
+        "rrf_k": args.rrf_k,
+        "questions_file": str(args.questions),
+        "modes": reports,
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(output, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return output
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    settings = get_settings()
+    try:
+        output = asyncio.run(run(args, settings))
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    for mode, report in output["modes"].items():
+        metrics = report["metrics"]
+        print(f"{mode}:")
+        for key, value in metrics.items():
+            if key == "evaluated_questions":
+                print(f"  questions: {value}")
+            else:
+                print(f"  {key}: {value:.4f}")
+    print(f"Output: {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [ ] **Step 5: Run unit tests, lint, and smoke-test the eval CLI**
+
+Run:
+
+```bash
+uv run pytest backend/tests/unit/test_dev_evaluation.py -q
+uv run ruff check backend/app/evaluation scripts/eval_retrieval_dev.py \
+  backend/tests/unit/test_dev_evaluation.py
+uv run ruff format --check backend/app/evaluation scripts/eval_retrieval_dev.py \
+  backend/tests/unit/test_dev_evaluation.py
+uv run python scripts/eval_retrieval_dev.py --help
+```
+
+Expected: tests pass, lint passes, and the CLI prints help.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/evaluation backend/tests/unit/test_dev_evaluation.py \
+  scripts/eval_retrieval_dev.py
+git commit -m "feat: add dense lexical and hybrid dev evaluation"
+```
+
+---
+
+### Task 9: Apply Index and Measure Real Dev Results
+
+**Files:**
+- No source files.
+- Writes: `data/processed/retrieval_dev_metrics.json` (gitignored).
+
+**Interfaces:**
+- Consumes: migration `0002`, lexical and hybrid retrievers, development questions.
+- Produces: measured dense/lexical/hybrid metrics and a verified GIN index plan.
+
+- [ ] **Step 1: Apply the migration**
+
+Run:
+
+```bash
+docker compose up -d db
+uv run alembic -c backend/alembic.ini upgrade head
+docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE chunks;"
+```
+
+Expected: migration applies and `VACUUM ANALYZE` completes.
+
+- [ ] **Step 2: Verify the GIN index is used**
+
+Run:
+
+```bash
+docker exec production-rag-db psql -U rag -d rag -c \
+  "EXPLAIN SELECT chunk_id FROM chunks WHERE search_vector @@ websearch_to_tsquery('english', 'rotate api key') ORDER BY ts_rank_cd(search_vector, websearch_to_tsquery('english', 'rotate api key'), 32) DESC LIMIT 5;"
+```
+
+Expected: the plan contains a `Bitmap Index Scan` on `ix_chunks_search_vector` or
+an index-backed plan, not a sequential scan.
+
+- [ ] **Step 3: Smoke-test lexical and hybrid search**
+
+Run:
+
+```bash
+uv run python scripts/lexical_search.py "How do I rotate an API key?" --top-k 5
+uv run python scripts/hybrid_search.py "How do I rotate an API key?" \
+  --top-k 5 --device cuda --dtype float16
+```
+
+Expected: relevant rotation/revocation chunks appear in both outputs.
+
+- [ ] **Step 4: Run the full development evaluation**
+
+Run:
+
+```bash
+uv run python scripts/eval_retrieval_dev.py \
+  --mode all \
+  --top-k 20 \
+  --candidate-k 50 \
+  --rrf-k 60 \
+  --device cuda \
+  --dtype float16
+```
+
+Expected: the report contains `dense`, `lexical`, and `hybrid` modes, 169 evaluated
+questions per mode, and all output writes to
+`data/processed/retrieval_dev_metrics.json`.
+
+- [ ] **Step 5: Compare against the dense baseline**
+
+Confirm the dense report reproduces the Block 2 baseline approximately:
+
+```text
+recall@1  0.2840
+recall@5  0.4643
+recall@10 0.5362
+recall@20 0.5836
+MRR       0.4330
+```
+
+Then record lexical and hybrid metrics. The hybrid result must not regress dense
+recall@10 or MRR. If it does, inspect candidate depth and RRF weights on the
+development split only, document any change, and rerun.
+
+- [ ] **Step 6: Clean integration-test rows**
+
+If integration tests were run against the development database, remove rows outside
+the default tenant:
+
+```bash
+docker exec production-rag-db psql -U rag -d rag -c \
+  "DELETE FROM documents WHERE tenant_id <> '00000000-0000-0000-0000-000000000001' OR knowledge_base_id <> '00000000-0000-0000-0000-000000000002';"
+docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE documents;"
+docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE chunks;"
+```
+
+- [ ] **Step 7: Commit**
+
+No source commit for this task. The metrics file is gitignored and will be summarized
+in Task 10.
+
+---
+
+### Task 10: Documentation and Final Verification
+
+**Files:**
+- Create: `docs/architecture/hybrid-retrieval.md`
+- Modify: `docs/design-decisions/0003-lexical-backend-and-fusion.md`
+- Modify: `README.md`
+- Modify: `plan.md`
+- Local/gitignored: `blog3.md`
+
+**Interfaces:**
+- Consumes: measured results from Task 9.
+- Produces: completed Block 3 documentation and verification evidence.
+
+- [ ] **Step 1: Write the architecture document**
+
+Create `docs/architecture/hybrid-retrieval.md` with:
+
+- Scope and non-goals.
+- The generated `search_vector` expression and GIN index.
+- Lexical query flow and `ts_rank_cd` limitation.
+- Dense, lexical, and hybrid component diagram.
+- RRF formula and defaults.
+- Development metrics table with measured values.
+- Error handling and empty-query behavior.
+- Limitations: English stemming, no exact BM25, RRF discards score magnitude,
+  candidate depth affects recall.
+- Holdout status: untouched.
+
+- [ ] **Step 2: Add measured results to the ADR**
+
+Append a `## Measured Results` section to
+`docs/design-decisions/0003-lexical-backend-and-fusion.md` with the real dense,
+lexical, and hybrid recall@1/5/10/20 and MRR values, the migration/index sizes if
+available, and a short decision note.
+
+- [ ] **Step 3: Update README**
+
+Update `README.md`:
+
+- Change the current status from Blocks 1-2 to Blocks 1-3.
+- Add PostgreSQL FTS and RRF to the implemented list.
+- Add a Block 3 workflow subsection with lexical, hybrid, and evaluation commands.
+- Add Block 3 measured results.
+- Add the new architecture and ADR links.
+- Update known limitations and the roadmap.
+
+- [ ] **Step 4: Mark the plan complete**
+
+Update the Block 3 task checkboxes in `plan.md` and add a Block 3 acceptance criteria
+section and risks table. Do not check commit steps until each commit exists.
+
+- [ ] **Step 5: Append the Block 3 blog entry**
+
+Append a Block 3 section to the local `blog3.md` (create it if needed). Keep it
+gitignored. Include the measured results, the Postgres FTS vs exact BM25 tradeoff,
+and the RRF lesson.
+
+- [ ] **Step 6: Run final verification**
+
+Run:
+
+```bash
+uv lock --check
+uv sync --check
+uv run pytest -q
+uv run pytest -q -m integration
+uv run ruff check .
+uv run ruff format --check .
+```
+
+Expected: all tests pass, integration tests pass, and lint/format are clean.
+
+- [ ] **Step 7: Clean integration-test rows again**
+
+Run the cleanup commands from Task 9 Step 6 and confirm:
+
+```bash
+docker exec production-rag-db psql -U rag -d rag -tAc \
+  "SELECT (SELECT count(*) FROM documents), (SELECT count(*) FROM chunks), (SELECT count(*) FROM chunks WHERE embedding IS NOT NULL);"
+```
+
+Expected: `34378|136383|136383` for the default tenant/knowledge base.
+
+- [ ] **Step 8: Commit documentation**
+
+```bash
+git add docs/architecture/hybrid-retrieval.md \
+  docs/design-decisions/0003-lexical-backend-and-fusion.md README.md plan.md
+git commit -m "docs: complete block 3 hybrid retrieval"
+```
+
+---
+
+### Block 3 Acceptance Criteria
+
+- A generated `search_vector` column exists on `chunks` and uses title weight `A`
+  and content weight `B`.
+- A GIN index exists and lexical queries use it.
+- `LexicalRetriever` returns relevant chunks using only query text, `top_k`, and
+  optional user source filters.
+- `HybridRetriever` fuses dense and lexical candidates with RRF and deterministic
+  tie-breaking.
+- `scripts/lexical_search.py`, `scripts/hybrid_search.py`, and
+  `scripts/eval_retrieval_dev.py` work.
+- Development metrics are reported for dense, lexical, and hybrid modes over 169
+  questions.
+- Hybrid does not regress dense recall@10 or MRR.
+- Unit and integration tests pass; Ruff and formatting checks pass.
+- The holdout set is untouched.
+- No exact BM25 library, reranker, generation, API, or full evaluation harness is
+  added.
+
+### Block 3 Risks
+
+| Risk | Mitigation |
+|---|---|
+| Generated column migration rewrites a large table | Run during a quiet window; verify disk space first |
+| GIN index is large or slow to build | Measure index size and build time; keep the index because query speed matters |
+| PostgreSQL FTS underperforms exact BM25 | Report honestly; exact BM25 is a later, separate decision |
+| RRF hides a weak retriever | Report dense, lexical, and hybrid metrics separately |
+| Candidate depth limits hybrid recall | Use `candidate_k=50`; tune only on dev and document changes |
+| Evaluation leakage | Keep expected doc IDs outside retriever signatures |
+| Holdout overfitting | Never run holdout during Block 3 |
+| Integration tests pollute the dev DB | Clean non-default tenant rows after integration runs |
+
+### Next Block Preview
+
+Block 4 should add evidence selection and context construction over the fused
+retrieval results. Do not start Block 4 until Block 3 verification is complete and
+the hybrid metrics are documented.
