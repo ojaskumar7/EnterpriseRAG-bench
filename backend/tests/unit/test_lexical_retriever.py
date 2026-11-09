@@ -58,6 +58,8 @@ async def test_retrieve_maps_lexical_results(monkeypatch: pytest.MonkeyPatch) ->
     assert query == "query"
     assert kwargs["top_k"] == 3
     assert kwargs["source_types"] == ["confluence"]
+    assert kwargs["tenant_id"] == retriever.tenant_id
+    assert kwargs["knowledge_base_id"] == retriever.knowledge_base_id
 
 
 @pytest.mark.asyncio
