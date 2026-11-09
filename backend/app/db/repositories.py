@@ -52,6 +52,12 @@ class ChunkSearchResult:
     score: float
 
 
+@dataclass(frozen=True)
+class LexicalSearchResult:
+    chunk: ChunkRecord
+    rank: float
+
+
 async def upsert_documents(
     session: AsyncSession,
     documents: Sequence[DocumentUpsert],
@@ -201,6 +207,41 @@ async def search_chunks(
         )
         for row in rows
     ]
+
+
+async def search_chunks_lexical(
+    session: AsyncSession,
+    query: str,
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    top_k: int = 10,
+    source_types: Sequence[str] | None = None,
+) -> list[LexicalSearchResult]:
+    """Return chunks ranked by PostgreSQL full-text search."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+    if not query.strip():
+        return []
+
+    tsquery = func.websearch_to_tsquery("english", query)
+    rank = func.ts_rank_cd(ChunkRecord.search_vector, tsquery, 32).label("rank")
+    statement = (
+        select(ChunkRecord, rank)
+        .where(
+            ChunkRecord.tenant_id == tenant_id,
+            ChunkRecord.knowledge_base_id == knowledge_base_id,
+            ChunkRecord.search_vector.op("@@")(tsquery),
+        )
+        .order_by(rank.desc(), ChunkRecord.chunk_id.asc())
+        .limit(top_k)
+    )
+    if source_types:
+        statement = statement.where(ChunkRecord.source_type.in_(list(source_types)))
+
+    rows = (await session.execute(statement)).all()
+    return [LexicalSearchResult(chunk=row[0], rank=float(row[1])) for row in rows]
 
 
 async def count_rows(
