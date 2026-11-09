@@ -71,7 +71,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
         raise ValueError("no development questions found")
 
     provider = None
-    if args.mode in {"dense", "hybrid"}:
+    if args.mode != "lexical":
         provider = BGEEmbeddingProvider(
             model_name=args.model,
             dimension=settings.embedding_dimension,
