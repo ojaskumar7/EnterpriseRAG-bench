@@ -95,10 +95,9 @@ All variants return the existing `RetrievedChunk` shape. The benchmark reuses
 ### BM25 configuration
 
 - Build an exact BM25 index with `bm25s`.
-- Tokenize with `bm25s.tokenize(..., stopwords="en")`. If the installed `bm25s`
-  version supports stemming, use Porter stemming; otherwise record the absence of
-  stemming as a limitation. The exact tokenizer, stemmer, `k1`, and `b` go in the
-  index manifest.
+- Tokenize with `bm25s.tokenize(..., stopwords="en")` and PyStemmer's English
+  stemmer. Add `bm25s` and `PyStemmer` as development dependencies only. The exact
+  tokenizer, stemmer, `k1`, and `b` go in the index manifest.
 - Use `k1=1.5`, `b=0.75` unless a documented library default differs.
 - Title weighting is a comparison variant, not an unrecorded default.
 - Persist the index under `data/processed/bm25_index/` (gitignored) with a manifest
@@ -145,7 +144,7 @@ instead, recommend it as the fallback. The benchmark does not implement the winn
 ## Deliverables
 
 - `scripts/benchmark_lexical.py`: standalone benchmark and reporting script.
-- `bm25s` added as a development dependency only.
+- `bm25s` and `PyStemmer` added as development dependencies only.
 - `data/processed/lexical_benchmark.json`: full metrics and latency artifact
   (gitignored).
 - `data/processed/bm25_index/`: persisted spike index and manifest (gitignored).
