@@ -6,8 +6,9 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Blocks 1 and 2 are complete. The ingestion pipeline and dense retrieval stack are
-implemented, verified on the real subset, and ready for Block 3.**
+**Blocks 1, 2, and 3 are complete. The ingestion pipeline, dense retrieval stack, and
+PostgreSQL FTS + hybrid retrieval stack are implemented, verified on the real subset,
+and ready for Block 4.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -19,13 +20,17 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - BGE embeddings loaded into PostgreSQL with pgvector.
 - An idempotent embedding/load pipeline and an HNSW cosine index.
 - Dense retrieval with a leakage-safe interface and development recall/MRR metrics.
+- PostgreSQL full-text lexical retrieval with a generated `search_vector` and GIN index.
+- Hybrid retrieval with Reciprocal Rank Fusion (RRF) over dense and lexical candidates.
+- A unified development evaluator for dense, lexical, and hybrid modes.
 - Unit, integration, and real-subset tests.
 
 The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
-documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md) and
-[`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md).
+documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
+[`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
+and [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md).
 
-BM25, hybrid retrieval, reranking, generation, the full benchmark evaluation harness,
+Exact BM25, reranking, generation, the full benchmark evaluation harness,
 authentication, and the API are deliberately deferred to later blocks.
 
 ## Problem
@@ -68,7 +73,7 @@ Document source
   -> Chunker
   -> EmbeddingProvider
   -> PostgreSQL documents/chunks + pgvector
-  -> BM25 index
+  -> PostgreSQL full-text search index (GIN)
 
 User question
   -> optional query rewriting/decomposition
@@ -98,7 +103,7 @@ The backend is a modular monolith with independent functional modules:
 | LLM | Google Gemini |
 | Embeddings | BGE (`bge-large-en-v1.5` initially), optional Gemini embeddings |
 | Vector database | PostgreSQL + pgvector |
-| Sparse retrieval | BM25 (`bm25s` initially; ParadeDB/OpenSearch optional later) |
+| Sparse retrieval | PostgreSQL full-text search (GIN); exact BM25 later if justified |
 | Fusion | Reciprocal Rank Fusion |
 | Reranking | BGE cross-encoder |
 | Orchestration | LangChain, used minimally at the LLM boundary |
@@ -181,7 +186,7 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
-Implemented Blocks 1 and 2 structure:
+Implemented Blocks 1-3 structure:
 
 ```text
 productionRAG/
@@ -206,9 +211,15 @@ productionRAG/
 │   │   │   ├── models.py
 │   │   │   ├── repositories.py
 │   │   │   └── session.py
+│   │   ├── evaluation/
+│   │   │   └── dev.py
 │   │   └── retrieval/
 │   │       ├── dense.py
-│   │       └── metrics.py
+│   │       ├── fusion.py
+│   │       ├── hybrid.py
+│   │       ├── lexical.py
+│   │       ├── metrics.py
+│   │       └── types.py
 │   ├── alembic.ini
 │   ├── alembic/
 │   └── tests/
@@ -222,7 +233,10 @@ productionRAG/
 │   ├── check_embedding_runtime.py
 │   ├── embed_and_load.py
 │   ├── dense_search.py
-│   └── eval_dense_dev.py
+│   ├── eval_dense_dev.py
+│   ├── lexical_search.py
+│   ├── hybrid_search.py
+│   └── eval_retrieval_dev.py
 ├── data/
 │   ├── raw/          # gitignored
 │   ├── processed/    # gitignored
@@ -230,10 +244,12 @@ productionRAG/
 ├── docs/
 │   ├── architecture/
 │   │   ├── ingestion.md
-│   │   └── embeddings-and-retrieval.md
+│   │   ├── embeddings-and-retrieval.md
+│   │   └── hybrid-retrieval.md
 │   └── design-decisions/
 │       ├── 0001-dataset-subset.md
-│       └── 0002-vector-store-and-embedding-runtime.md
+│       ├── 0002-vector-store-and-embedding-runtime.md
+│       └── 0003-lexical-backend-and-fusion.md
 ├── compose.yml
 ├── .env.example
 ├── pyproject.toml
@@ -315,6 +331,34 @@ The development metrics file is written to
 `data/processed/dense_dev_metrics.json` (gitignored). Do not run the holdout split
 during development.
 
+### Block 3 workflow
+
+```bash
+# Start PostgreSQL and apply the Block 3 lexical schema (generated search_vector + GIN)
+docker compose up -d db
+uv run alembic -c backend/alembic.ini upgrade head
+
+# Optional: refresh planner statistics after the migration
+docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE chunks;"
+
+# Query the PostgreSQL full-text index
+uv run python scripts/lexical_search.py "How do I rotate an API key?" --top-k 5
+
+# Query dense + lexical with Reciprocal Rank Fusion
+uv run python scripts/hybrid_search.py "How do I rotate an API key?" \
+  --top-k 5 --device cuda --dtype float16
+
+# Evaluate dense, lexical, and hybrid on the 169 development questions
+uv run python scripts/eval_retrieval_dev.py \
+  --mode all --top-k 20 --candidate-k 50 --rrf-k 60 \
+  --device cuda --dtype float16
+```
+
+The unified metrics file is written to
+`data/processed/retrieval_dev_metrics.json` (gitignored). The lexical backend is
+PostgreSQL full-text search with `ts_rank_cd`, not exact BM25. Do not run the holdout
+split during development.
+
 ### Testing
 
 ```bash
@@ -347,6 +391,21 @@ uv run ruff format --check .
 - `uv run pytest -q`: 93 passed.
 - `uv run ruff check .`: passed.
 - `uv run ruff format --check .`: passed.
+- Holdout set: not used.
+
+### Block 3 verification evidence
+
+- Generated `search_vector` exists on `chunks` with title weight `A` and content weight `B`.
+- GIN index `ix_chunks_search_vector` exists (about 75 MB) and lexical queries use it
+  (`Bitmap Index Scan`).
+- `LexicalRetriever`, `HybridRetriever`, and RRF are implemented with deterministic
+  tie-breaking.
+- `scripts/lexical_search.py`, `scripts/hybrid_search.py`, and
+  `scripts/eval_retrieval_dev.py` work.
+- Development metrics cover 169 questions for dense, lexical, and hybrid modes.
+- Hybrid recall@10 and MRR exceed dense on the clean database.
+- Final database state: 34,378 documents, 136,383 chunks, 136,383 embeddings, 0
+  non-default rows.
 - Holdout set: not used.
 
 ### Block 1 retrospective
@@ -394,20 +453,48 @@ The local GPU thermally throttles under sustained load, so the bulk load used
 similarity of 1.0001 and a minimum of 0.9998. Pass `--dtype float16` when querying this
 index.
 
+## Block 3 measured results
+
+Block 3 added a generated PostgreSQL `search_vector` column, a GIN index, a lexical
+retriever, and hybrid RRF fusion. The final evaluation ran on a clean database
+(`34,378` documents, `136,383` chunks, `136,383` embeddings, `0` non-default rows) over
+the 169 development questions with `top_k=20`, `candidate_k=50`, `rrf_k=60`, and equal
+weights:
+
+| Mode | recall@1 | recall@5 | recall@10 | recall@20 | MRR |
+|---|---:|---:|---:|---:|---:|
+| dense | 0.2840 | 0.4761 | 0.5303 | 0.5777 | 0.4345 |
+| lexical | 0.0118 | 0.0178 | 0.0178 | 0.0178 | 0.0178 |
+| hybrid | 0.2929 | 0.4726 | 0.5348 | 0.5821 | 0.4404 |
+
+Hybrid recall@10 (+0.0045) and MRR (+0.0059) exceed dense, so the Block 3 acceptance
+criterion passes. Hybrid recall@5 is 0.0035 below dense, a non-binding trade-off.
+Dense results versus the Block 2 baseline are mixed rather than uniformly better (for
+example recall@10 0.5303 vs 0.5362).
+
+The lexical path is effectively non-functional on this development split: 156 of 169
+questions return zero lexical results because `websearch_to_tsquery` ANDs the terms of a
+natural-language question. Hybrid gains therefore come from the minority of questions
+where lexical returns matches. This is a documented limitation, not a hidden success.
+
+These are diagnostics, not benchmark claims. The 42-question holdout set remains
+untouched.
+
 ## Development Roadmap
 
-| Block | Focus |
-|---|---|
-| 1 | Project setup, dataset subset, loading, normalization, chunking |
-| 2 | Embeddings, PostgreSQL, pgvector, dense retrieval |
-| 3 | BM25, hybrid retrieval, Reciprocal Rank Fusion |
-| 4 | Cross-encoder reranking and retrieval optimization |
-| 5 | Gemini integration, context construction, citations |
-| 6 | Evaluation framework and retrieval benchmarking |
-| 7 | Hallucination control, abstention, multi-document reasoning |
-| 8 | FastAPI, authentication, and multi-tenancy |
-| 9 | Asynchronous ingestion and document lifecycle |
-| 10 | Observability, frontend, Docker, and deployment |
+| Block | Focus | Status |
+|---|---|---|
+| 1 | Project setup, dataset subset, loading, normalization, chunking | complete |
+| 2 | Embeddings, PostgreSQL, pgvector, dense retrieval | complete |
+| 3 | PostgreSQL FTS, hybrid retrieval, Reciprocal Rank Fusion | complete |
+| 4 | Evidence selection and context construction | planned |
+| 5 | Cross-encoder reranking and retrieval optimization | planned |
+| 6 | Gemini integration, citations, and grounded generation | planned |
+| 7 | Evaluation framework and retrieval benchmarking | planned |
+| 8 | Hallucination control, abstention, multi-document reasoning | planned |
+| 9 | FastAPI, authentication, and multi-tenancy | planned |
+| 10 | Asynchronous ingestion and document lifecycle | planned |
+| 11 | Observability, frontend, Docker, and deployment | planned |
 
 ## Engineering Principles
 
@@ -422,7 +509,10 @@ index.
 
 ## Known Limitations
 
-- Block 2 stops at dense retrieval. There is no BM25, hybrid retrieval, reranking, or generated answer yet.
+- Block 3 stops at hybrid retrieval. There is no exact BM25, reranker, evidence selection, or generated answer yet.
+- The lexical backend is PostgreSQL full-text search (`ts_rank_cd`), not exact BM25.
+- Lexical retrieval is effectively non-functional on the development split: 156 of 169 questions return zero results because `websearch_to_tsquery` ANDs natural-language terms.
+- Hybrid gains over dense are small and hybrid recall@5 is slightly below dense.
 - Block 1 uses a four-source development subset, not the full 511,962-document corpus.
 - PDF and OCR ingestion are not implemented or validated by this dataset.
 - The corpus has 34,378 document members but 34,375 unique `doc_id` values. The database uses content-addressed identity `(tenant_id, knowledge_base_id, source_type, doc_id, content_hash)` to preserve duplicate IDs.
@@ -430,17 +520,21 @@ index.
 - Document-version comparison is not supported by the dataset and requires a separate design.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
-- Dense retrieval has development-split diagnostics only; there are no official benchmark results yet.
+- Dense, lexical, and hybrid retrieval have development-split diagnostics only; there are no official benchmark results yet.
+- English stemming and stopword removal are fixed by the PostgreSQL `english` text search configuration.
+- RRF uses ranks only and discards score magnitude; candidate depth (`candidate_k`) bounds what fusion can recover.
 - The measured index was built with `float16` weights because the laptop GPU thermally throttles; queries must use the same dtype.
 - No multi-tenant authentication or authorization exists yet.
 
 ## Documentation
 
-- [`plan.md`](plan.md): detailed Block 1 and Block 2 implementation plan.
+- [`plan.md`](plan.md): detailed Block 1-3 implementation plan.
 - [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
 - [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md): embeddings, pgvector schema, loading, dense retrieval, and measured results.
+- [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md): lexical schema, PostgreSQL FTS query flow, RRF fusion, and measured hybrid results.
 - [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
 - [`docs/design-decisions/0002-vector-store-and-embedding-runtime.md`](docs/design-decisions/0002-vector-store-and-embedding-runtime.md): pgvector, BGE, PyTorch/CUDA, and dtype decisions.
+- [`docs/design-decisions/0003-lexical-backend-and-fusion.md`](docs/design-decisions/0003-lexical-backend-and-fusion.md): PostgreSQL FTS vs exact BM25, RRF, and measured results.
 - `docs/evaluation/`: evaluation methodology and results, added later.
 
 ## License and Attribution

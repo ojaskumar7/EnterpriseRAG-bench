@@ -122,3 +122,33 @@ remains untouched.
 | Weighted score fusion | Requires arbitrary normalization and tuning on a small dev set |
 | Lexical prefilter then dense rerank | Lexical misses become unrecoverable; changes retrieval semantics |
 | Query-time `to_tsvector` with no index | Correct but too slow for 136,383 chunks |
+
+## Measured Results
+
+Measured on the clean development database: `34,378` documents, `136,383` chunks,
+`136,383` non-null embeddings, `0` non-default tenant/knowledge-base rows. Model
+`BAAI/bge-large-en-v1.5` on CUDA `float16`, 169 development questions, `top_k=20`,
+`candidate_k=50`, `rrf_k=60`, equal weights. The holdout split was not used.
+
+| Mode | recall@1 | recall@5 | recall@10 | recall@20 | MRR |
+|---|---:|---:|---:|---:|---:|
+| dense | 0.2840 | 0.4761 | 0.5303 | 0.5777 | 0.4345 |
+| lexical | 0.0118 | 0.0178 | 0.0178 | 0.0178 | 0.0178 |
+| hybrid | 0.2929 | 0.4726 | 0.5348 | 0.5821 | 0.4404 |
+
+Hybrid vs dense: recall@1 +0.0089, recall@5 -0.0035, recall@10 +0.0045, recall@20
++0.0044, MRR +0.0059. Hybrid recall@10 and MRR both exceed dense, so the acceptance
+criterion passes.
+
+Storage after migration `0002`: the `ix_chunks_search_vector` GIN index is about
+**75 MB**, the `chunks` table plus indexes is about **2.4 GB**, and the existing HNSW
+index remains about **1.1 GB**. `EXPLAIN` confirms a `Bitmap Index Scan on
+ix_chunks_search_vector`.
+
+**Decision note:** Keep PostgreSQL FTS + RRF for Block 3. The hybrid gain is real but
+small because `websearch_to_tsquery` ANDs natural-language terms; 156 of 169 dev
+questions return zero lexical results. Dense vs the Block 2 baseline is mixed rather than
+uniformly better (recall@10 0.5303 vs 0.5362). This result validates reusing the existing
+database but shows that the lexical query formulation, not the fusion method, is the
+current bottleneck. Exact BM25 or a better query formulation (OR semantics, query
+rewriting, or stemming/fuzzy matching) is a separate later decision.

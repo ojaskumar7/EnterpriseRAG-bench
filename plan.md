@@ -1542,8 +1542,8 @@ dense, lexical, and hybrid metrics without touching the holdout split.
 **Tech Stack:** Python 3.12, `uv`, PostgreSQL 16, pgvector, SQLAlchemy 2 async,
 asyncpg, Alembic, sentence-transformers, PyTorch, pytest-asyncio, Ruff.
 
-**Status:** planned. Do not start Block 3 implementation until the Block 2 verification
-is committed and the plan below is approved.
+**Status:** complete. Implementation, migration, measured development metrics,
+verification, and documentation are done. The holdout split was not used.
 
 ### Global Constraints
 
@@ -1601,7 +1601,7 @@ is committed and the plan below is approved.
   - `RetrievedChunk(chunk_id: str, doc_id: str, source_type: str, title: str, chunk_index: int, content: str, score: float, metadata: dict[str, Any])`
   - `reciprocal_rank_fusion(rankings: Sequence[Sequence[RetrievedChunk]], *, k: int = 60, weights: Sequence[float] | None = None) -> list[RetrievedChunk]`
 
-- [ ] **Step 1: Write the failing fusion tests**
+- [x] **Step 1: Write the failing fusion tests**
 
 Create `backend/tests/unit/test_fusion.py`:
 
@@ -1674,7 +1674,7 @@ def test_rrf_rejects_invalid_arguments() -> None:
         reciprocal_rank_fusion([[_chunk("a")]], weights=[-1.0])
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -1684,7 +1684,7 @@ uv run pytest backend/tests/unit/test_fusion.py -q
 
 Expected: FAIL because `app.retrieval.types` and `app.retrieval.fusion` do not exist.
 
-- [ ] **Step 3: Add the shared result type**
+- [x] **Step 3: Add the shared result type**
 
 Create `backend/app/retrieval/types.py`:
 
@@ -1711,7 +1711,7 @@ class RetrievedChunk:
     metadata: dict[str, Any]
 ```
 
-- [ ] **Step 4: Implement RRF**
+- [x] **Step 4: Implement RRF**
 
 Create `backend/app/retrieval/fusion.py`:
 
@@ -1766,7 +1766,7 @@ def reciprocal_rank_fusion(
     return fused
 ```
 
-- [ ] **Step 5: Update dense retrieval to use the shared type**
+- [x] **Step 5: Update dense retrieval to use the shared type**
 
 In `backend/app/retrieval/dense.py`, remove the local `RetrievedChunk` dataclass,
 remove the now-unused `from dataclasses import dataclass` import, and add:
@@ -1788,7 +1788,7 @@ from app.retrieval.types import RetrievedChunk
 __all__ = ["DenseRetriever", "RetrievedChunk"]
 ```
 
-- [ ] **Step 6: Run the tests and verify they pass**
+- [x] **Step 6: Run the tests and verify they pass**
 
 Run:
 
@@ -1800,7 +1800,7 @@ uv run ruff format --check backend/app/retrieval backend/tests/unit/test_fusion.
 
 Expected: PASS and no lint errors.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/retrieval/types.py backend/app/retrieval/fusion.py \
@@ -1824,7 +1824,7 @@ git commit -m "feat: add shared retrieval types and RRF fusion"
   - `ChunkRecord.search_vector` generated `tsvector` column.
   - Index `ix_chunks_search_vector` using GIN.
 
-- [ ] **Step 1: Write the failing schema test**
+- [x] **Step 1: Write the failing schema test**
 
 Add this test to `backend/tests/integration/test_database.py`:
 
@@ -1847,7 +1847,7 @@ async def test_lexical_search_schema_exists(session) -> None:
     assert index == "ix_chunks_search_vector"
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run:
 
@@ -1857,7 +1857,7 @@ uv run pytest backend/tests/integration/test_database.py::test_lexical_search_sc
 
 Expected: FAIL because `search_vector` and the GIN index do not exist.
 
-- [ ] **Step 3: Add the generated column and GIN index to the model**
+- [x] **Step 3: Add the generated column and GIN index to the model**
 
 In `backend/app/db/models.py`, import `Computed` and `TSVECTOR`:
 
@@ -1903,7 +1903,7 @@ search_vector: Mapped[str | None] = mapped_column(
 )
 ```
 
-- [ ] **Step 4: Add the migration**
+- [x] **Step 4: Add the migration**
 
 Create `backend/alembic/versions/0002_add_lexical_search.py`:
 
@@ -1958,7 +1958,7 @@ def downgrade() -> None:
     op.drop_column("chunks", "search_vector")
 ```
 
-- [ ] **Step 5: Apply the migration**
+- [x] **Step 5: Apply the migration**
 
 Run:
 
@@ -1969,7 +1969,7 @@ uv run alembic -c backend/alembic.ini upgrade head
 
 Expected: migration `0002` applies without error.
 
-- [ ] **Step 6: Run the schema test and verify it passes**
+- [x] **Step 6: Run the schema test and verify it passes**
 
 Run:
 
@@ -1979,7 +1979,7 @@ uv run pytest backend/tests/integration/test_database.py::test_lexical_search_sc
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/db/models.py backend/alembic/versions/0002_add_lexical_search.py \
@@ -2001,7 +2001,7 @@ git commit -m "feat: add lexical search schema"
   - `LexicalSearchResult(chunk: ChunkRecord, rank: float)`
   - `search_chunks_lexical(session, query, *, tenant_id, knowledge_base_id, top_k=10, source_types=None) -> list[LexicalSearchResult]`
 
-- [ ] **Step 1: Write the failing lexical repository test**
+- [x] **Step 1: Write the failing lexical repository test**
 
 Create `backend/tests/integration/test_lexical_retrieval.py`:
 
@@ -2163,7 +2163,7 @@ async def test_lexical_search_honors_source_filter(session_factory) -> None:
     assert [result.chunk.doc_id for result in results] == ["doc-github"]
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -2173,7 +2173,7 @@ uv run pytest backend/tests/integration/test_lexical_retrieval.py -q
 
 Expected: FAIL because `search_chunks_lexical` and `LexicalSearchResult` do not exist.
 
-- [ ] **Step 3: Add the result type and query**
+- [x] **Step 3: Add the result type and query**
 
 In `backend/app/db/repositories.py`, add after `ChunkSearchResult`:
 
@@ -2225,7 +2225,7 @@ async def search_chunks_lexical(
     ]
 ```
 
-- [ ] **Step 4: Run the integration tests and verify they pass**
+- [x] **Step 4: Run the integration tests and verify they pass**
 
 Run:
 
@@ -2237,7 +2237,7 @@ uv run ruff format --check backend/app/db/repositories.py backend/tests/integrat
 
 Expected: PASS and no lint errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/db/repositories.py backend/tests/integration/test_lexical_retrieval.py
@@ -2259,7 +2259,7 @@ git commit -m "feat: add lexical search repository query"
   - `LexicalRetriever(session_factory, *, tenant_id, knowledge_base_id)`
   - `LexicalRetriever.retrieve(query, *, top_k=10, source_types=None) -> list[RetrievedChunk]`
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 Create `backend/tests/unit/test_lexical_retriever.py`:
 
@@ -2356,7 +2356,7 @@ def test_retriever_does_not_expose_evaluation_metadata() -> None:
         assert name not in parameters
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -2366,7 +2366,7 @@ uv run pytest backend/tests/unit/test_lexical_retriever.py -q
 
 Expected: FAIL because `app.retrieval.lexical` does not exist.
 
-- [ ] **Step 3: Implement the retriever**
+- [x] **Step 3: Implement the retriever**
 
 Create `backend/app/retrieval/lexical.py`:
 
@@ -2449,7 +2449,7 @@ from app.retrieval.types import RetrievedChunk
 __all__ = ["DenseRetriever", "LexicalRetriever", "RetrievedChunk"]
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [x] **Step 4: Run the tests and verify they pass**
 
 Run:
 
@@ -2463,7 +2463,7 @@ uv run ruff format --check backend/app/retrieval/lexical.py \
 
 Expected: PASS and no lint errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/retrieval/lexical.py backend/app/retrieval/__init__.py \
@@ -2486,7 +2486,7 @@ git commit -m "feat: add lexical retriever"
   - `HybridRetriever(dense_retriever, lexical_retriever, *, rrf_k=60, dense_weight=1.0, lexical_weight=1.0, candidate_k=50)`
   - `HybridRetriever.retrieve(query, *, top_k=10, source_types=None) -> list[RetrievedChunk]`
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
 
 Create `backend/tests/unit/test_hybrid_retriever.py`:
 
@@ -2597,7 +2597,7 @@ def test_retriever_does_not_expose_evaluation_metadata() -> None:
         assert name not in parameters
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -2607,7 +2607,7 @@ uv run pytest backend/tests/unit/test_hybrid_retriever.py -q
 
 Expected: FAIL because `app.retrieval.hybrid` does not exist.
 
-- [ ] **Step 3: Implement the hybrid retriever**
+- [x] **Step 3: Implement the hybrid retriever**
 
 Create `backend/app/retrieval/hybrid.py`:
 
@@ -2700,7 +2700,7 @@ from app.retrieval.types import RetrievedChunk
 __all__ = ["DenseRetriever", "HybridRetriever", "LexicalRetriever", "RetrievedChunk"]
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [x] **Step 4: Run the tests and verify they pass**
 
 Run:
 
@@ -2714,7 +2714,7 @@ uv run ruff format --check backend/app/retrieval/hybrid.py \
 
 Expected: PASS and no lint errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/retrieval/hybrid.py backend/app/retrieval/__init__.py \
@@ -2733,7 +2733,7 @@ git commit -m "feat: add hybrid retriever with RRF"
 - Consumes: `LexicalRetriever`, `Settings`, database session factory.
 - Produces: a CLI that prints ranked lexical results or JSON.
 
-- [ ] **Step 1: Implement the CLI**
+- [x] **Step 1: Implement the CLI**
 
 Create `scripts/lexical_search.py`:
 
@@ -2826,7 +2826,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 2: Smoke-test the CLI**
+- [x] **Step 2: Smoke-test the CLI**
 
 Run:
 
@@ -2838,7 +2838,7 @@ uv run python scripts/lexical_search.py "How do I rotate an API key?" --top-k 3
 Expected: the first command prints help; the second prints ranked results with
 `rank=...` scores.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/lexical_search.py
@@ -2856,7 +2856,7 @@ git commit -m "feat: add lexical search CLI"
 - Consumes: `DenseRetriever`, `LexicalRetriever`, `HybridRetriever`, `BGEEmbeddingProvider`.
 - Produces: a CLI that prints fused results or JSON.
 
-- [ ] **Step 1: Implement the CLI**
+- [x] **Step 1: Implement the CLI**
 
 Create `scripts/hybrid_search.py`:
 
@@ -2981,7 +2981,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 2: Smoke-test the CLI**
+- [x] **Step 2: Smoke-test the CLI**
 
 Run:
 
@@ -2993,7 +2993,7 @@ uv run python scripts/hybrid_search.py "How do I rotate an API key?" \
 
 Expected: ranked fused results with `rrf_score=...`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/hybrid_search.py
@@ -3018,7 +3018,7 @@ git commit -m "feat: add hybrid search CLI"
   - `evaluate_retriever(retriever, questions, *, top_k: int, progress_every: int = 25, label: str = "") -> dict[str, object]`
   - CLI `scripts/eval_retrieval_dev.py` with `--mode dense|lexical|hybrid|all`.
 
-- [ ] **Step 1: Write the failing evaluation tests**
+- [x] **Step 1: Write the failing evaluation tests**
 
 Create `backend/tests/unit/test_dev_evaluation.py`:
 
@@ -3102,7 +3102,7 @@ async def test_evaluate_retriever_reports_metrics() -> None:
     assert report["metrics"]["mrr"] == 1.0
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -3112,7 +3112,7 @@ uv run pytest backend/tests/unit/test_dev_evaluation.py -q
 
 Expected: FAIL because `app.evaluation.dev` does not exist.
 
-- [ ] **Step 3: Add the shared evaluation module**
+- [x] **Step 3: Add the shared evaluation module**
 
 Create `backend/app/evaluation/__init__.py`:
 
@@ -3231,7 +3231,7 @@ async def evaluate_retriever(
     return {"metrics": metrics, "per_question": per_question}
 ```
 
-- [ ] **Step 4: Add the evaluation CLI**
+- [x] **Step 4: Add the evaluation CLI**
 
 Create `scripts/eval_retrieval_dev.py`:
 
@@ -3405,7 +3405,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 5: Run unit tests, lint, and smoke-test the eval CLI**
+- [x] **Step 5: Run unit tests, lint, and smoke-test the eval CLI**
 
 Run:
 
@@ -3420,7 +3420,7 @@ uv run python scripts/eval_retrieval_dev.py --help
 
 Expected: tests pass, lint passes, and the CLI prints help.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/app/evaluation backend/tests/unit/test_dev_evaluation.py \
@@ -3440,7 +3440,7 @@ git commit -m "feat: add dense lexical and hybrid dev evaluation"
 - Consumes: migration `0002`, lexical and hybrid retrievers, development questions.
 - Produces: measured dense/lexical/hybrid metrics and a verified GIN index plan.
 
-- [ ] **Step 1: Apply the migration**
+- [x] **Step 1: Apply the migration**
 
 Run:
 
@@ -3452,7 +3452,7 @@ docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE chunks;"
 
 Expected: migration applies and `VACUUM ANALYZE` completes.
 
-- [ ] **Step 2: Verify the GIN index is used**
+- [x] **Step 2: Verify the GIN index is used**
 
 Run:
 
@@ -3464,7 +3464,7 @@ docker exec production-rag-db psql -U rag -d rag -c \
 Expected: the plan contains a `Bitmap Index Scan` on `ix_chunks_search_vector` or
 an index-backed plan, not a sequential scan.
 
-- [ ] **Step 3: Smoke-test lexical and hybrid search**
+- [x] **Step 3: Smoke-test lexical and hybrid search**
 
 Run:
 
@@ -3476,7 +3476,7 @@ uv run python scripts/hybrid_search.py "How do I rotate an API key?" \
 
 Expected: relevant rotation/revocation chunks appear in both outputs.
 
-- [ ] **Step 4: Run the full development evaluation**
+- [x] **Step 4: Run the full development evaluation**
 
 Run:
 
@@ -3494,7 +3494,7 @@ Expected: the report contains `dense`, `lexical`, and `hybrid` modes, 169 evalua
 questions per mode, and all output writes to
 `data/processed/retrieval_dev_metrics.json`.
 
-- [ ] **Step 5: Compare against the dense baseline**
+- [x] **Step 5: Compare against the dense baseline**
 
 Confirm the dense report reproduces the Block 2 baseline approximately:
 
@@ -3510,7 +3510,7 @@ Then record lexical and hybrid metrics. The hybrid result must not regress dense
 recall@10 or MRR. If it does, inspect candidate depth and RRF weights on the
 development split only, document any change, and rerun.
 
-- [ ] **Step 6: Clean integration-test rows**
+- [x] **Step 6: Clean integration-test rows**
 
 If integration tests were run against the development database, remove rows outside
 the default tenant:
@@ -3522,7 +3522,7 @@ docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE documents;"
 docker exec production-rag-db psql -U rag -d rag -c "VACUUM ANALYZE chunks;"
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 No source commit for this task. The metrics file is gitignored and will be summarized
 in Task 10.
@@ -3542,7 +3542,7 @@ in Task 10.
 - Consumes: measured results from Task 9.
 - Produces: completed Block 3 documentation and verification evidence.
 
-- [ ] **Step 1: Write the architecture document**
+- [x] **Step 1: Write the architecture document**
 
 Create `docs/architecture/hybrid-retrieval.md` with:
 
@@ -3557,14 +3557,14 @@ Create `docs/architecture/hybrid-retrieval.md` with:
   candidate depth affects recall.
 - Holdout status: untouched.
 
-- [ ] **Step 2: Add measured results to the ADR**
+- [x] **Step 2: Add measured results to the ADR**
 
 Append a `## Measured Results` section to
 `docs/design-decisions/0003-lexical-backend-and-fusion.md` with the real dense,
 lexical, and hybrid recall@1/5/10/20 and MRR values, the migration/index sizes if
 available, and a short decision note.
 
-- [ ] **Step 3: Update README**
+- [x] **Step 3: Update README**
 
 Update `README.md`:
 
@@ -3575,18 +3575,18 @@ Update `README.md`:
 - Add the new architecture and ADR links.
 - Update known limitations and the roadmap.
 
-- [ ] **Step 4: Mark the plan complete**
+- [x] **Step 4: Mark the plan complete**
 
 Update the Block 3 task checkboxes in `plan.md` and add a Block 3 acceptance criteria
 section and risks table. Do not check commit steps until each commit exists.
 
-- [ ] **Step 5: Append the Block 3 blog entry**
+- [x] **Step 5: Append the Block 3 blog entry**
 
 Append a Block 3 section to the local `blog3.md` (create it if needed). Keep it
 gitignored. Include the measured results, the Postgres FTS vs exact BM25 tradeoff,
 and the RRF lesson.
 
-- [ ] **Step 6: Run final verification**
+- [x] **Step 6: Run final verification**
 
 Run:
 
@@ -3601,7 +3601,7 @@ uv run ruff format --check .
 
 Expected: all tests pass, integration tests pass, and lint/format are clean.
 
-- [ ] **Step 7: Clean integration-test rows again**
+- [x] **Step 7: Clean integration-test rows again**
 
 Run the cleanup commands from Task 9 Step 6 and confirm:
 
@@ -3612,7 +3612,7 @@ docker exec production-rag-db psql -U rag -d rag -tAc \
 
 Expected: `34378|136383|136383` for the default tenant/knowledge base.
 
-- [ ] **Step 8: Commit documentation**
+- [x] **Step 8: Commit documentation**
 
 ```bash
 git add docs/architecture/hybrid-retrieval.md \
