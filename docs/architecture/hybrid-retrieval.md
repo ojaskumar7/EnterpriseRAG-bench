@@ -163,10 +163,11 @@ Hybrid vs dense on the same run:
 | recall@20 | 0.5777 | 0.5821 | +0.0044 |
 | MRR | 0.4345 | 0.4404 | +0.0059 |
 
-**Acceptance:** hybrid recall@10 and MRR both exceed dense, so Block 3's success criterion
-passes. Hybrid recall@5 is 0.0035 below dense, a non-binding trade-off. Dense results
-versus the Block 2 baseline are mixed rather than uniformly better (for example recall@10
-0.5303 vs 0.5362).
+**Acceptance:** hybrid recall@10 and MRR both exceed the same-run dense baseline, so
+Block 3's success criterion passes. Hybrid recall@10 remains 0.0014 below the Block 2
+dense baseline (0.5348 vs 0.5362). Hybrid recall@5 is 0.0035 below same-run dense, a
+non-binding trade-off. Dense results versus the Block 2 baseline are mixed rather than
+uniformly better (for example recall@10 0.5303 vs 0.5362).
 
 These are development-split diagnostics, not benchmark claims. The metrics file is
 `data/processed/retrieval_dev_metrics.json` (gitignored).

@@ -1524,6 +1524,9 @@ Block 3 should add BM25, hybrid retrieval, and Reciprocal Rank Fusion over the s
 document/chunk tables, using the Block 2 dense-retrieval metrics as a comparison point.
 Do not start Block 3 until Block 2 verification is complete.
 
+> Historical note: Block 3 instead used PostgreSQL FTS, not exact BM25; see
+> `docs/design-decisions/0003-lexical-backend-and-fusion.md`.
+
 ---
 
 ## Block 3 Implementation Plan — Lexical and Hybrid Retrieval

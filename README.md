@@ -403,9 +403,16 @@ uv run ruff format --check .
 - `scripts/lexical_search.py`, `scripts/hybrid_search.py`, and
   `scripts/eval_retrieval_dev.py` work.
 - Development metrics cover 169 questions for dense, lexical, and hybrid modes.
-- Hybrid recall@10 and MRR exceed dense on the clean database.
+- Hybrid recall@10 and MRR exceed the same-run dense baseline; hybrid recall@10 remains
+  slightly below the Block 2 dense baseline (0.5348 vs 0.5362).
+- `uv lock --check`: up-to-date lockfile.
+- `uv sync --check`: no changes.
+- `uv run pytest -q`: 114 passed.
+- `uv run pytest -q -m integration`: 12 passed, 102 deselected.
+- `uv run ruff check .`: passed.
+- `uv run ruff format --check .`: 68 files already formatted.
 - Final database state: 34,378 documents, 136,383 chunks, 136,383 embeddings, 0
-  non-default rows.
+  non-default rows (`34378|136383|136383`).
 - Holdout set: not used.
 
 ### Block 1 retrospective
@@ -467,8 +474,10 @@ weights:
 | lexical | 0.0118 | 0.0178 | 0.0178 | 0.0178 | 0.0178 |
 | hybrid | 0.2929 | 0.4726 | 0.5348 | 0.5821 | 0.4404 |
 
-Hybrid recall@10 (+0.0045) and MRR (+0.0059) exceed dense, so the Block 3 acceptance
-criterion passes. Hybrid recall@5 is 0.0035 below dense, a non-binding trade-off.
+Hybrid recall@10 (+0.0045) and MRR (+0.0059) exceed the same-run dense baseline, so the
+Block 3 acceptance criterion passes. Hybrid recall@10 remains 0.0014 below the Block 2
+dense baseline (0.5348 vs 0.5362). Hybrid recall@5 is 0.0035 below same-run dense, a
+non-binding trade-off.
 Dense results versus the Block 2 baseline are mixed rather than uniformly better (for
 example recall@10 0.5303 vs 0.5362).
 
