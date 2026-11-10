@@ -91,8 +91,8 @@ async def test_lexical_search_orders_by_rank(session_factory) -> None:
             session,
             tenant_id=tenant_id,
             knowledge_base_id=knowledge_base_id,
-            doc_id="doc-alpha",
-            content="alpha beta gamma",
+            doc_id="doc-title-match",
+            content="beta gamma",
             title="Alpha guide",
             source_type="confluence",
         )
@@ -100,7 +100,16 @@ async def test_lexical_search_orders_by_rank(session_factory) -> None:
             session,
             tenant_id=tenant_id,
             knowledge_base_id=knowledge_base_id,
-            doc_id="doc-delta",
+            doc_id="doc-content-match",
+            content="alpha beta gamma",
+            title="Delta guide",
+            source_type="confluence",
+        )
+        await _seed_chunk(
+            session,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            doc_id="doc-no-match",
             content="delta epsilon",
             title="Delta guide",
             source_type="confluence",
@@ -115,8 +124,11 @@ async def test_lexical_search_orders_by_rank(session_factory) -> None:
             top_k=5,
         )
 
-    assert [result.chunk.doc_id for result in results] == ["doc-alpha"]
-    assert results[0].rank > 0
+    assert [result.chunk.doc_id for result in results] == [
+        "doc-title-match",
+        "doc-content-match",
+    ]
+    assert results[0].rank > results[1].rank > 0
 
 
 async def test_lexical_search_honors_source_filter(session_factory) -> None:

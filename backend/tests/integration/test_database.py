@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 
 import pytest
@@ -255,12 +256,33 @@ async def test_lexical_search_schema_exists(session) -> None:
             "WHERE table_name = 'chunks' AND column_name = 'search_vector'"
         )
     )
+    generation_expression = await session.scalar(
+        text(
+            "SELECT generation_expression FROM information_schema.columns "
+            "WHERE table_name = 'chunks' AND column_name = 'search_vector'"
+        )
+    )
     index = await session.scalar(
         text(
             "SELECT indexname FROM pg_indexes "
             "WHERE tablename = 'chunks' AND indexname = 'ix_chunks_search_vector'"
         )
     )
+    index_definition = await session.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE tablename = 'chunks' AND indexname = 'ix_chunks_search_vector'"
+        )
+    )
 
     assert generated == "ALWAYS"
     assert index == "ix_chunks_search_vector"
+
+    assert generation_expression is not None
+    expression = generation_expression.lower()
+    assert "setweight" in expression
+    assert re.search(r"setweight\(.*?title.*?\),\s*'a'", expression)
+    assert re.search(r"setweight\(.*?content.*?\),\s*'b'", expression)
+
+    assert index_definition is not None
+    assert "using gin" in index_definition.lower()

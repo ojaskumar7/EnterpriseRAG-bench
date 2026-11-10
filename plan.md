@@ -3312,7 +3312,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
         raise ValueError("no development questions found")
 
     provider = None
-    if args.mode in {"dense", "hybrid"}:
+    if args.mode != "lexical":
         provider = BGEEmbeddingProvider(
             model_name=args.model,
             dimension=settings.embedding_dimension,
@@ -3407,6 +3407,10 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 ```
+
+> Note: the original snippet used `if args.mode in {"dense", "hybrid"}`, which was
+> corrected to `if args.mode != "lexical"` because `all` must build dense/hybrid
+> retrievers too.
 
 - [x] **Step 5: Run unit tests, lint, and smoke-test the eval CLI**
 
