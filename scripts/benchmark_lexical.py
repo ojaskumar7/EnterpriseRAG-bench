@@ -150,10 +150,18 @@ def build_parser() -> argparse.ArgumentParser:
 async def run(args: argparse.Namespace) -> dict[str, object]:
     if "holdout" in args.questions.name.lower():
         raise ValueError("holdout questions are not allowed in this benchmark")
+    expected_questions = (PROJECT_ROOT / "data/sample/dev_questions.jsonl").resolve()
+    if args.questions.resolve() != expected_questions:
+        raise ValueError(
+            "only the development questions may be evaluated: "
+            f"{expected_questions}"
+        )
     if args.limit is not None and args.limit <= 0:
         raise ValueError("--limit must be positive")
-    if args.top_k <= 0 or args.candidate_k <= 0 or args.rrf_k <= 0:
-        raise ValueError("top-k, candidate-k, and rrf-k must be positive")
+    if args.top_k < 20:
+        raise ValueError("--top-k must be at least 20")
+    if args.candidate_k <= 0 or args.rrf_k <= 0:
+        raise ValueError("candidate-k and rrf-k must be positive")
     if args.pg_timeout <= 0:
         raise ValueError("--pg-timeout must be positive")
 
@@ -161,6 +169,8 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     questions = read_dev_questions(args.questions, args.limit)
     if not questions:
         raise ValueError("no development questions were loaded")
+    if args.limit is None and len(questions) != 169:
+        raise ValueError("expected exactly 169 development questions")
 
     config = PostgresBenchmarkConfig(
         tenant_id=args.tenant_id,
