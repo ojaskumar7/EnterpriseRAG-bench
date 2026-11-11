@@ -78,9 +78,7 @@ def _drift(left: dict[str, object], right: dict[str, object]) -> dict[str, objec
     }
     return {
         "questions_with_different_docs": sum(
-            1
-            for question_id, docs in left_by_id.items()
-            if docs != right_by_id.get(question_id)
+            1 for question_id, docs in left_by_id.items() if docs != right_by_id.get(question_id)
         ),
         "recall_at_10_delta": round(
             float(left["metrics"]["recall_at_10"])  # type: ignore[index]
@@ -152,10 +150,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("holdout questions are not allowed in this benchmark")
     expected_questions = (PROJECT_ROOT / "data/sample/dev_questions.jsonl").resolve()
     if args.questions.resolve() != expected_questions:
-        raise ValueError(
-            "only the development questions may be evaluated: "
-            f"{expected_questions}"
-        )
+        raise ValueError(f"only the development questions may be evaluated: {expected_questions}")
     if args.limit is not None and args.limit <= 0:
         raise ValueError("--limit must be positive")
     if args.top_k < 20:
@@ -187,9 +182,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         chunks = await load_chunks(connection, config)
         if len(chunks) != chunk_count:
             raise ValueError("loaded chunk count does not match the database")
-        fingerprint = corpus_fingerprint(
-            (chunk.chunk_id, chunk.content_hash) for chunk in chunks
-        )
+        fingerprint = corpus_fingerprint((chunk.chunk_id, chunk.content_hash) for chunk in chunks)
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         document_frequencies = await load_document_frequencies(connection, config)
         if not document_frequencies:
@@ -242,9 +235,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                 "size_bytes": size_bytes,
                 "manifest": manifest,
             }
-            bm25_retrievers[
-                "bm25_content" if weighting == "content" else "bm25_title_weighted"
-            ] = BM25SpikeRetriever(index, chunks, stemmer=stemmer)
+            bm25_retrievers["bm25_content" if weighting == "content" else "bm25_title_weighted"] = (
+                BM25SpikeRetriever(index, chunks, stemmer=stemmer)
+            )
 
         pg_retrievers = {
             "pg_and": PostgresLexicalRetriever(

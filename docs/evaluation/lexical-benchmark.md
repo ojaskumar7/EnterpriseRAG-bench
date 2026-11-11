@@ -1,0 +1,84 @@
+# Lexical Retrieval Benchmark (Block 3.5)
+
+Date: 2026-11-11
+Commit: 548bac1430b3ec9b365cd37f2c7eb16543523710
+Status: Benchmark-only spike; production retrieval unchanged.
+
+## Executive Summary
+
+BM25 passed the lexical gate. `bm25_content` reached recall@20 = 0.8494 with zero zero-result questions and a top-50 p95 of 1.81 ms, clearing Gates A, B, and C by a wide margin.
+
+The BM25 hybrid passed the quality and latency gates. `hybrid_bm25` reached recall@10 = 0.7665 and MRR = 0.6058 versus `dense_a` recall@10 = 0.5303 and MRR = 0.4345, while keeping recall@5 and recall@20 above the dense baseline. Dense drift was zero on both headline metrics.
+
+Recommended next action: write a separate Block 4 implementation plan for BM25 hybrid retrieval. Do not change production retrieval defaults in this block.
+
+## Setup
+
+- Questions: 169 development questions.
+- Holdout: not used.
+- Corpus: 34,378 documents; 136,383 chunks.
+- BM25: `bm25s`, `k1=1.5`, `b=0.75`, method `lucene`, English stopwords, PyStemmer English.
+- Title weighting: title tokens repeated three times (`title_x3`), compared with content-only indexing.
+- Dense baseline: same-run `dense_a` and `dense_b`; report drift.
+- Runtime: CUDA, float16, model `BAAI/bge-large-en-v1.5`, top-k 20, candidate-k 50, RRF k 60, PostgreSQL timeout 10 s, `hnsw.ef_search` 40.
+- BM25 index size: content 150,496,236 bytes; `title_x3` 150,496,238 bytes. Both loaded from the persisted index (load times 0.174 s and 0.191 s, no rebuild).
+
+## Lexical Variant Results
+
+| Variant | Recall@5 | Recall@10 | Recall@20 | MRR | Zero-result questions | Timeouts | p95 ms | p95 top-50 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| pg_and | 0.0178 | 0.0178 | 0.0178 | 0.0178 | 156 | 0 | 23.19 | n/a |
+| pg_and_or | 0.0370 | 0.0449 | 0.0468 | 0.0495 | 118 | 0 | 31.85 | n/a |
+| pg_relaxed3 | 0.0370 | 0.0449 | 0.0468 | 0.0436 | 118 | 0 | 47.00 | n/a |
+| pg_relaxed5 | 0.0370 | 0.0449 | 0.0468 | 0.0436 | 117 | 0 | 52.97 | n/a |
+| bm25_content | 0.7310 | 0.7776 | 0.8494 | 0.6771 | 0 | 0 | 1.68 | 1.81 |
+| bm25_title_weighted | 0.7300 | 0.7922 | 0.8469 | 0.6753 | 0 | 0 | 1.66 | 1.64 |
+
+Best BM25 variant (highest recall@20, then MRR): `bm25_content`.
+
+## Hybrid Results
+
+| Variant | Recall@5 | Recall@10 | Recall@20 | MRR | p95 ms | Zero-result questions | Timeouts |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| dense_a | 0.4761 | 0.5303 | 0.5777 | 0.4345 | 300.46 | 0 | 0 |
+| dense_b | 0.4761 | 0.5303 | 0.5777 | 0.4345 | 30.12 | 0 | 0 |
+| hybrid_bm25 | 0.6568 | 0.7665 | 0.8284 | 0.6058 | 50.23 | 0 | 0 |
+
+Dense drift: recall@10 delta 0.0, MRR delta 0.0, 0/169 questions with different retrieved documents. Hybrid quality is therefore conclusive.
+
+## Gate Evaluation
+
+| Gate | Requirement | Measured | Result |
+|---|---|---|---|
+| A | BM25 recall@20 >= 0.15 | 0.8494 (`bm25_content`) | pass |
+| B | BM25 zero-result questions <= 20 | 0 (`bm25_content`) | pass |
+| C | BM25 top-50 p95 < 200 ms | 1.81 ms (`bm25_content`) | pass |
+| D | Hybrid +0.01 on recall@10 or MRR | recall@10 0.7665 vs 0.5303 (+0.2362); MRR 0.6058 vs 0.4345 (+0.1713) | pass |
+| E | Hybrid recall@5 no worse than dense by 0.01 | 0.6568 vs 0.4761 (threshold 0.4661) | pass |
+| F | Hybrid recall@20 no worse than dense by 0.01 | 0.8284 vs 0.5777 (threshold 0.5677) | pass |
+| G | Hybrid other headline metric no worse by 0.01 | MRR 0.6058 vs 0.4345 (threshold 0.4245) | pass |
+| H | Dense drift <= 0.01 on recall@10 and MRR | recall@10 delta 0.0; MRR delta 0.0 | pass |
+
+## Recommendation
+
+All gates pass, so BM25 and the BM25 hybrid are both viable. Recommend a separate Block 4 implementation plan for a BM25 hybrid retriever, covering index lifecycle, fusion parameters, and production rollout. Do not change production retrieval defaults in this block.
+
+## Reproduction
+
+```bash
+uv sync --group dev
+uv run python scripts/benchmark_lexical.py --device cuda --dtype float16 --output data/processed/lexical_benchmark.json
+```
+
+Expected runtime setup: PostgreSQL `production-rag-db` running with 34,378 documents and 136,383 chunks. Results are written to `data/processed/lexical_benchmark.json` and the persisted BM25 indexes live under `data/processed/bm25_index/`.
+
+## Limitations
+
+- Results are for one tenant and one corpus.
+- Exact BM25 has no synonym or semantic expansion.
+- PostgreSQL OR variants can time out and are measured as zero-result failures. In this run no timeouts occurred, but 117–118 of 169 questions returned zero results.
+- BM25 index memory and build time are reported but not optimized.
+- This spike does not implement reranking, learned sparse retrieval, or production changes.
+- `select_rarest` applies its limit before moving zero-document-frequency terms last; this affects `pg_and_or` for 22/169 development questions.
+- Unquoted lexemes are passed to `to_tsquery`. 0/169 development questions error, but URL-like tokens could raise `PostgresSyntaxError`.
+- `dense_a` p95 may be inflated by cold start; `dense_b` and the drift between them are recorded. The hybrid gate uses the same-run dense baseline.
