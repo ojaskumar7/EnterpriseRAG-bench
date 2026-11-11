@@ -1,16 +1,18 @@
 # Lexical Retrieval Benchmark (Block 3.5)
 
 Date: 2026-11-11
-Commit: 548bac1430b3ec9b365cd37f2c7eb16543523710
+Benchmark run commit: 548bac1430b3ec9b365cd37f2c7eb16543523710
 Status: Benchmark-only spike; production retrieval unchanged.
 
 ## Executive Summary
 
 BM25 passed the lexical gate. `bm25_content` reached recall@20 = 0.8494 with zero zero-result questions and a top-50 p95 of 1.81 ms, clearing Gates A, B, and C by a wide margin.
 
-The BM25 hybrid passed the quality and latency gates. `hybrid_bm25` reached recall@10 = 0.7665 and MRR = 0.6058 versus `dense_a` recall@10 = 0.5303 and MRR = 0.4345, while keeping recall@5 and recall@20 above the dense baseline. Dense drift was zero on both headline metrics.
+Exact BM25 alone is the strongest development result. `bm25_content` beats `hybrid_bm25` on all four headline metrics: recall@5 0.7310 vs 0.6568, recall@10 0.7776 vs 0.7665, recall@20 0.8494 vs 0.8284, and MRR 0.6771 vs 0.6058.
 
-Recommended next action: write a separate Block 4 implementation plan for BM25 hybrid retrieval. Do not change production retrieval defaults in this block.
+The BM25 hybrid passed the quality gates relative to dense. `hybrid_bm25` reached recall@10 = 0.7665 and MRR = 0.6058 versus `dense_a` recall@10 = 0.5303 and MRR = 0.4345, while keeping recall@5 and recall@20 above the dense baseline. Dense drift was zero on both headline metrics. However, current fusion underperforms BM25 on every headline metric, so fusion is not strictly beneficial as configured. Only the BM25 top-50 latency is gated; there is no hybrid latency gate.
+
+Recommended next action: write a separate Block 4 implementation plan focused on BM25-only productionization. Treat hybrid fusion tuning as a secondary investigation, not an immediate hybrid rollout. Do not change production retrieval defaults in this block.
 
 ## Setup
 
@@ -21,7 +23,7 @@ Recommended next action: write a separate Block 4 implementation plan for BM25 h
 - Title weighting: title tokens repeated three times (`title_x3`), compared with content-only indexing.
 - Dense baseline: same-run `dense_a` and `dense_b`; report drift.
 - Runtime: CUDA, float16, model `BAAI/bge-large-en-v1.5`, top-k 20, candidate-k 50, RRF k 60, PostgreSQL timeout 10 s, `hnsw.ef_search` 40.
-- BM25 index size: content 150,496,236 bytes; `title_x3` 150,496,238 bytes. Both loaded from the persisted index (load times 0.174 s and 0.191 s, no rebuild).
+- BM25 index size: content 150,496,236 bytes; `title_x3` 150,496,238 bytes. Both loaded from the persisted index (load times 0.174 s and 0.191 s, no rebuild). The reported `build_seconds` of 0.0 is a cache hit, not a measure of index construction time.
 
 ## Lexical Variant Results
 
@@ -46,6 +48,8 @@ Best BM25 variant (highest recall@20, then MRR): `bm25_content`.
 
 Dense drift: recall@10 delta 0.0, MRR delta 0.0, 0/169 questions with different retrieved documents. Hybrid quality is therefore conclusive.
 
+BM25 vs hybrid: `hybrid_bm25` underperforms `bm25_content` on every headline metric: recall@5 0.6568 vs 0.7310 (-0.0742), recall@10 0.7665 vs 0.7776 (-0.0111), recall@20 0.8284 vs 0.8494 (-0.0210), and MRR 0.6058 vs 0.6771 (-0.0713). Fusion as configured improves over dense, but degrades the strongest lexical signal.
+
 ## Gate Evaluation
 
 | Gate | Requirement | Measured | Result |
@@ -61,7 +65,7 @@ Dense drift: recall@10 delta 0.0, MRR delta 0.0, 0/169 questions with different 
 
 ## Recommendation
 
-All gates pass, so BM25 and the BM25 hybrid are both viable. Recommend a separate Block 4 implementation plan for a BM25 hybrid retriever, covering index lifecycle, fusion parameters, and production rollout. Do not change production retrieval defaults in this block.
+Exact BM25 alone is the strongest development result, and all lexical gates pass. Recommend a separate Block 4 implementation plan focused on BM25-only productionization, covering index lifecycle, update and rebuild strategy, observability, and rollout. Current hybrid fusion underperforms BM25 on every headline metric, so tune RRF k, candidate-k, and weighting as a secondary investigation rather than rolling out this hybrid as-is. Do not change production retrieval defaults in this block.
 
 ## Reproduction
 
@@ -77,7 +81,7 @@ Expected runtime setup: PostgreSQL `production-rag-db` running with 34,378 docum
 - Results are for one tenant and one corpus.
 - Exact BM25 has no synonym or semantic expansion.
 - PostgreSQL OR variants can time out and are measured as zero-result failures. In this run no timeouts occurred, but 117–118 of 169 questions returned zero results.
-- BM25 index memory and build time are reported but not optimized.
+- BM25 index memory is reported but not optimized. `build_seconds` is 0.0 because persisted indexes were reused (cache hit), not a measurement of index construction time.
 - This spike does not implement reranking, learned sparse retrieval, or production changes.
 - `select_rarest` applies its limit before moving zero-document-frequency terms last; this affects `pg_and_or` for 22/169 development questions.
 - Unquoted lexemes are passed to `to_tsquery`. 0/169 development questions error, but URL-like tokens could raise `PostgresSyntaxError`.
