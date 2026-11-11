@@ -5,19 +5,25 @@ import importlib.metadata
 import pytest
 import Stemmer
 
+from app.evaluation.dev import DevQuestion
 from app.evaluation.lexical_benchmark import (
     BenchmarkChunk,
     BM25SpikeRetriever,
+    TimingRetriever,
     build_manifest,
     corpus_fingerprint,
+    evaluate_variant,
     latency_summary,
     load_or_build_bm25_index,
+    measure_top_k_latency,
     or_websearch_text,
     percentile,
+    select_best_bm25_variant,
     select_rarest,
     title_weighted_text,
     validate_manifest,
 )
+from app.retrieval.types import RetrievedChunk
 
 
 def test_percentile_returns_interpolated_values() -> None:
@@ -251,3 +257,73 @@ def test_load_or_build_bm25_index_rejects_mismatched_manifest(tmp_path) -> None:
             stemmer=stemmer,
             expected_manifest=bad,
         )
+
+
+class FakeRetriever:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types=None,
+    ) -> list[RetrievedChunk]:
+        self.calls.append((query, top_k))
+        if query == "empty":
+            return []
+        return [
+            RetrievedChunk(
+                chunk_id="c1",
+                doc_id="d1",
+                source_type="github",
+                title="Title",
+                chunk_index=0,
+                content="content",
+                score=1.0,
+                metadata={},
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_evaluate_variant_records_latency_and_zero_results() -> None:
+    questions = [
+        DevQuestion("q1", "alpha", ["d1"]),
+        DevQuestion("q2", "empty", ["d2"]),
+    ]
+    inner = FakeRetriever()
+    retriever = TimingRetriever(inner)
+
+    result = await evaluate_variant("fake", retriever, questions, top_k=5)
+
+    assert result["metrics"]["evaluated_questions"] == 2
+    assert result["zero_result_questions"] == 1
+    assert result["latency"]["count"] == 2
+    assert result["timeouts"] == 0
+    assert len(result["per_question"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_measure_top_k_latency_uses_requested_k() -> None:
+    questions = [DevQuestion("q1", "alpha", ["d1"])]
+    inner = FakeRetriever()
+
+    result = await measure_top_k_latency(inner, questions, top_k=50)
+
+    assert result["count"] == 1
+    assert inner.calls == [("alpha", 50)]
+
+
+def test_select_best_bm25_variant_prefers_recall_then_mrr() -> None:
+    results = {
+        "bm25_content": {
+            "metrics": {"recall_at_20": 0.20, "mrr": 0.10},
+        },
+        "bm25_title_weighted": {
+            "metrics": {"recall_at_20": 0.20, "mrr": 0.11},
+        },
+    }
+
+    assert select_best_bm25_variant(results) == "bm25_title_weighted"

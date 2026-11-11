@@ -15,6 +15,7 @@ from typing import Any
 import bm25s
 import Stemmer
 
+from app.evaluation.dev import DevQuestion, evaluate_retriever
 from app.retrieval.types import RetrievedChunk
 
 BM25_K1 = 1.5
@@ -308,3 +309,102 @@ def load_or_build_bm25_index(
         encoding="utf-8",
     )
     return bm25, build_seconds, 0.0, _index_size(index_dir)
+
+
+class TimingRetriever:
+    """Record per-query durations around another retriever."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.durations_ms: list[float] = []
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        started = time.perf_counter()
+        try:
+            return await self.inner.retrieve(
+                query,
+                top_k=top_k,
+                source_types=source_types,
+            )
+        finally:
+            self.durations_ms.append((time.perf_counter() - started) * 1000.0)
+
+
+async def measure_top_k_latency(
+    retriever: Any,
+    questions: Sequence[DevQuestion],
+    *,
+    top_k: int,
+) -> dict[str, float | int]:
+    """Measure latency at a specific top-k without computing metrics."""
+
+    if top_k <= 0:
+        raise ValueError("top_k must be positive")
+
+    durations_ms: list[float] = []
+    for question in questions:
+        started = time.perf_counter()
+        await retriever.retrieve(question.question, top_k=top_k)
+        durations_ms.append((time.perf_counter() - started) * 1000.0)
+    return latency_summary(durations_ms)
+
+
+async def evaluate_variant(
+    name: str,
+    retriever: Any,
+    questions: Sequence[DevQuestion],
+    *,
+    top_k: int,
+) -> dict[str, object]:
+    """Evaluate one variant and attach latency and zero-result counts."""
+
+    timed = TimingRetriever(retriever)
+    report = await evaluate_retriever(
+        timed,
+        questions,
+        top_k=top_k,
+        label=name,
+    )
+    per_question = report["per_question"]
+    zero_results = sum(
+        1
+        for item in per_question
+        if not item["retrieved_doc_ids"]  # type: ignore[index]
+    )
+    return {
+        **report,
+        "latency": latency_summary(timed.durations_ms),
+        "zero_result_questions": zero_results,
+        "timeouts": int(getattr(retriever, "timeouts", 0)),
+    }
+
+
+def _metric(result: Mapping[str, object], name: str) -> float:
+    metrics = result.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return 0.0
+    return float(metrics.get(name, 0.0))
+
+
+def select_best_bm25_variant(results: Mapping[str, Mapping[str, object]]) -> str:
+    """Pick the BM25 variant with the best recall@20, then MRR."""
+
+    candidates = ("bm25_content", "bm25_title_weighted")
+    available = [name for name in candidates if name in results]
+    if not available:
+        raise ValueError("no BM25 variants were evaluated")
+
+    return max(
+        available,
+        key=lambda name: (
+            _metric(results[name], "recall_at_20"),
+            _metric(results[name], "mrr"),
+            name == "bm25_title_weighted",
+        ),
+    )
