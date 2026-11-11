@@ -203,7 +203,7 @@ class BM25SpikeRetriever:
 
         candidate_k = min(len(self.chunks), max(top_k * 10, top_k))
         indices, scores = self.bm25.retrieve(
-            query_tokens,
+            [query_tokens],
             k=candidate_k,
             show_progress=False,
         )

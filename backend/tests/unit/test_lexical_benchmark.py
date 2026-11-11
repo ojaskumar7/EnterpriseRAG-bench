@@ -85,11 +85,11 @@ def test_manifest_validation_rejects_corpus_mismatch() -> None:
 
 class FakeBM25:
     def __init__(self) -> None:
-        self.calls: list[tuple[list[str], int]] = []
+        self.calls: list[tuple[list[list[str]], int]] = []
 
     def retrieve(
         self,
-        query_tokens: list[str],
+        query_tokens: list[list[str]],
         k: int,
         *,
         show_progress: bool = False,
@@ -129,6 +129,7 @@ async def test_bm25_spike_retriever_maps_scores_and_filters_sources() -> None:
     assert [result.chunk_id for result in results] == ["c2"]
     assert results[0].score == 4.0
     assert results[0].metadata == {}
+    assert fake.calls[0][0] == [["alpha"]]
     assert fake.calls[0][1] == 2
 
 
@@ -143,6 +144,38 @@ async def test_bm25_spike_retriever_returns_empty_for_blank_or_stopword_query() 
 
     assert await retriever.retrieve("   ") == []
     assert await retriever.retrieve("the") == []
+
+
+@pytest.mark.asyncio
+async def test_bm25_spike_retriever_queries_real_bm25s_index(tmp_path) -> None:
+    chunks = [
+        make_chunk("c1", "d1", "github", "alpha content"),
+        make_chunk("c2", "d2", "jira", "beta content"),
+    ]
+    expected = build_manifest(
+        index_name="content",
+        corpus_fingerprint=corpus_fingerprint(
+            (chunk.chunk_id, chunk.content_hash) for chunk in chunks
+        ),
+        documents=2,
+        chunks=2,
+        title_weighting="content",
+        bm25s_version=importlib.metadata.version("bm25s"),
+        pystemmer_version=importlib.metadata.version("PyStemmer"),
+    )
+    stemmer = Stemmer.Stemmer("english")
+    bm25, _, _, _ = load_or_build_bm25_index(
+        index_dir=tmp_path / "content",
+        chunks=chunks,
+        title_weighting="content",
+        stemmer=stemmer,
+        expected_manifest=expected,
+    )
+    retriever = BM25SpikeRetriever(bm25, chunks, stemmer=stemmer)
+
+    results = await retriever.retrieve("alpha", top_k=1)
+
+    assert [result.chunk_id for result in results] == ["c1"]
 
 
 def test_load_or_build_bm25_index_persists_and_loads(tmp_path) -> None:
