@@ -94,12 +94,12 @@ Exact BM25 alone is the strongest development result, and all lexical gates pass
 
 ```bash
 uv sync --group dev
-uv run python scripts/benchmark_lexical.py --device cuda --dtype float16 --output data/processed/lexical_benchmark.json
+uv run python scripts/benchmark_lexical.py --device cuda --dtype float16 --output data/processed/lexical_benchmark.json --rebuild-index
 ```
 
 Expected runtime setup: PostgreSQL `production-rag-db` running with 34,378 documents and 136,383 chunks. Results are written to `data/processed/lexical_benchmark.json` and the persisted BM25 indexes live under `data/processed/bm25_index/`.
 
-The corpus fingerprint now includes chunk titles because title text is part of the indexed BM25 text. The next full run will therefore rebuild the persisted indexes once; the measured results in this report remain valid.
+The corpus fingerprint now includes chunk titles because title text is part of the indexed BM25 text. The first run after this change requires `--rebuild-index` once; subsequent runs can omit it. The measured results in this report remain valid.
 
 ## Limitations
 

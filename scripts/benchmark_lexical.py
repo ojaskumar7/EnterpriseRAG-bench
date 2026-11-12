@@ -22,7 +22,14 @@ EXPECTED_DOCUMENTS = 34_378
 EXPECTED_CHUNKS = 136_383
 
 import asyncpg  # noqa: E402
-import Stemmer  # noqa: E402
+
+try:
+    import Stemmer  # noqa: E402
+except ImportError as exc:
+    raise ImportError(
+        "the lexical benchmark requires development dependencies (bm25s, PyStemmer); "
+        "run `uv sync --group dev`"
+    ) from exc
 
 from app.db.session import build_engine, build_session_factory  # noqa: E402
 from app.embeddings.bge import BGEEmbeddingProvider  # noqa: E402
