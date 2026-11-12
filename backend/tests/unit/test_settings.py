@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -82,3 +84,12 @@ def test_invalid_values(
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_bm25_settings_defaults() -> None:
+    settings = Settings()
+
+    assert settings.bm25_index_root == Path("data/indexes/bm25")
+    assert settings.bm25_k1 == 1.5
+    assert settings.bm25_b == 0.75
+    assert settings.bm25_retention == 2

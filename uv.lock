@@ -266,10 +266,12 @@ source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "bm25s" },
     { name = "pgvector" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pystemmer" },
     { name = "sentence-transformers" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "torch" },
@@ -278,8 +280,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "bm25s" },
-    { name = "pystemmer" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -290,10 +290,12 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "bm25s", specifier = ">=0.3.16" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "pyarrow", specifier = ">=17.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.4" },
+    { name = "pystemmer", specifier = ">=3.1.0" },
     { name = "sentence-transformers", specifier = ">=3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "torch", specifier = "==2.8.0" },
@@ -302,8 +304,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "bm25s", specifier = ">=0.3.16" },
-    { name = "pystemmer", specifier = ">=3.1.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=5.0" },

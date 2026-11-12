@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -31,6 +32,10 @@ class Settings(BaseSettings):
     embedding_dtype: str = "float32"
     embedding_batch_size: int = Field(default=32, gt=0)
     embedding_query_instruction: str = BGE_QUERY_INSTRUCTION
+    bm25_index_root: Path = Path("data/indexes/bm25")
+    bm25_k1: float = Field(default=1.5, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0, le=1)
+    bm25_retention: int = Field(default=2, ge=1)
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 
