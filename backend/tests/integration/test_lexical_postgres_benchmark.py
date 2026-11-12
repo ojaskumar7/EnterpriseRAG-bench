@@ -59,6 +59,7 @@ async def test_postgres_benchmark_queries_are_read_only() -> None:
                 **kwargs,
             )
             results = await retriever.retrieve("API key", top_k=5)
+            assert results, f"{mode} returned no results for 'API key'"
             assert len(results) <= 5
     finally:
         await connection.close()

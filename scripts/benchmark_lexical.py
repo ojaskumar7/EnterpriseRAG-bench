@@ -18,6 +18,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
+EXPECTED_DOCUMENTS = 34_378
+EXPECTED_CHUNKS = 136_383
+
 import asyncpg  # noqa: E402
 import Stemmer  # noqa: E402
 
@@ -177,12 +180,18 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     engine = None
     try:
         documents, chunk_count = await load_corpus_counts(connection, config)
-        if documents == 0 or chunk_count == 0:
-            raise ValueError("benchmark corpus is empty")
+        if documents != EXPECTED_DOCUMENTS or chunk_count != EXPECTED_CHUNKS:
+            raise ValueError(
+                "benchmark corpus counts do not match: expected "
+                f"{EXPECTED_DOCUMENTS} documents and {EXPECTED_CHUNKS} chunks, "
+                f"got {documents} documents and {chunk_count} chunks"
+            )
         chunks = await load_chunks(connection, config)
         if len(chunks) != chunk_count:
             raise ValueError("loaded chunk count does not match the database")
-        fingerprint = corpus_fingerprint((chunk.chunk_id, chunk.content_hash) for chunk in chunks)
+        fingerprint = corpus_fingerprint(
+            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
+        )
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         document_frequencies = await load_document_frequencies(connection, config)
         if not document_frequencies:

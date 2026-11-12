@@ -43,11 +43,18 @@ def test_latency_summary_reports_p50_and_p95() -> None:
 
 
 def test_corpus_fingerprint_is_order_independent() -> None:
-    left = corpus_fingerprint([("b", "2"), ("a", "1")])
-    right = corpus_fingerprint([("a", "1"), ("b", "2")])
+    left = corpus_fingerprint([("b", "2", "Beta"), ("a", "1", "Alpha")])
+    right = corpus_fingerprint([("a", "1", "Alpha"), ("b", "2", "Beta")])
 
     assert left == right
     assert len(left) == 64
+
+
+def test_corpus_fingerprint_changes_when_only_title_changes() -> None:
+    left = corpus_fingerprint([("a", "1", "Alpha")])
+    right = corpus_fingerprint([("a", "1", "Beta")])
+
+    assert left != right
 
 
 def test_select_rarest_orders_zero_and_missing_frequencies_last() -> None:
@@ -161,7 +168,7 @@ async def test_bm25_spike_retriever_queries_real_bm25s_index(tmp_path) -> None:
     expected = build_manifest(
         index_name="content",
         corpus_fingerprint=corpus_fingerprint(
-            (chunk.chunk_id, chunk.content_hash) for chunk in chunks
+            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
         ),
         documents=2,
         chunks=2,
@@ -192,7 +199,7 @@ def test_load_or_build_bm25_index_persists_and_loads(tmp_path) -> None:
     expected = build_manifest(
         index_name="content",
         corpus_fingerprint=corpus_fingerprint(
-            (chunk.chunk_id, chunk.content_hash) for chunk in chunks
+            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
         ),
         documents=2,
         chunks=2,
@@ -230,7 +237,7 @@ def test_load_or_build_bm25_index_rejects_mismatched_manifest(tmp_path) -> None:
     expected = build_manifest(
         index_name="content",
         corpus_fingerprint=corpus_fingerprint(
-            (chunk.chunk_id, chunk.content_hash) for chunk in chunks
+            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
         ),
         documents=1,
         chunks=1,

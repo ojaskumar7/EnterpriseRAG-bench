@@ -12,8 +12,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import bm25s
-import Stemmer
+try:
+    import bm25s
+    import Stemmer
+except ImportError as exc:
+    raise ImportError(
+        "the lexical benchmark requires development dependencies (bm25s, PyStemmer); "
+        "run `uv sync --group dev`"
+    ) from exc
 
 from app.evaluation.dev import DevQuestion, evaluate_retriever
 from app.retrieval.types import RetrievedChunk
@@ -71,14 +77,16 @@ def latency_summary(durations_ms: Sequence[float]) -> dict[str, float | int]:
     }
 
 
-def corpus_fingerprint(chunks: Iterable[tuple[str, str]]) -> str:
-    """Hash chunk IDs and content hashes independent of row order."""
+def corpus_fingerprint(chunks: Iterable[tuple[str, str, str]]) -> str:
+    """Hash chunk IDs, content hashes, and titles independent of row order."""
 
     digest = hashlib.sha256()
-    for chunk_id, content_hash in sorted(chunks):
+    for chunk_id, content_hash, title in sorted(chunks):
         digest.update(chunk_id.encode("utf-8"))
         digest.update(b"\0")
         digest.update(content_hash.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(title.encode("utf-8"))
         digest.update(b"\n")
     return digest.hexdigest()
 
@@ -157,8 +165,13 @@ def validate_manifest(
     """Reject a persisted index that does not match this run."""
 
     for key, expected_value in expected.items():
-        if saved.get(key) != expected_value:
-            raise ValueError(f"BM25 manifest mismatch for key: {key}")
+        actual_value = saved.get(key)
+        if actual_value != expected_value:
+            raise ValueError(
+                f"BM25 manifest mismatch for key '{key}': "
+                f"expected {expected_value!r}, got {actual_value!r}; "
+                "rerun with --rebuild-index"
+            )
 
 
 def _tokenize(text: str, stemmer: Any) -> list[str]:
