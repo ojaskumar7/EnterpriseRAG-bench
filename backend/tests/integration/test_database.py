@@ -7,13 +7,15 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.db.models import ChunkRecord
 from app.db.repositories import (
     ChunkUpsert,
     DocumentUpsert,
     count_rows,
+    get_chunks_by_ids,
     get_embedded_chunk_ids,
     search_chunks,
     upsert_chunks,
@@ -286,3 +288,25 @@ async def test_lexical_search_schema_exists(session) -> None:
 
     assert index_definition is not None
     assert "using gin" in index_definition.lower()
+
+
+@pytest.mark.integration
+async def test_get_chunks_by_ids_enforces_tenant_and_source(session: AsyncSession) -> None:
+    chunk = (await session.execute(select(ChunkRecord).limit(1))).scalar_one()
+
+    rows = await get_chunks_by_ids(
+        session,
+        [chunk.chunk_id],
+        tenant_id=chunk.tenant_id,
+        knowledge_base_id=chunk.knowledge_base_id,
+        source_types=[chunk.source_type],
+    )
+    assert [row.chunk_id for row in rows] == [chunk.chunk_id]
+
+    wrong_tenant = await get_chunks_by_ids(
+        session,
+        [chunk.chunk_id],
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=chunk.knowledge_base_id,
+    )
+    assert wrong_tenant == []

@@ -244,6 +244,28 @@ async def search_chunks_lexical(
     return [LexicalSearchResult(chunk=row[0], rank=float(row[1])) for row in rows]
 
 
+async def get_chunks_by_ids(
+    session: AsyncSession,
+    chunk_ids: Sequence[str],
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    source_types: Sequence[str] | None = None,
+) -> list[ChunkRecord]:
+    if not chunk_ids:
+        return []
+
+    statement = select(ChunkRecord).where(
+        ChunkRecord.tenant_id == tenant_id,
+        ChunkRecord.knowledge_base_id == knowledge_base_id,
+        ChunkRecord.chunk_id.in_(list(chunk_ids)),
+    )
+    if source_types:
+        statement = statement.where(ChunkRecord.source_type.in_(list(source_types)))
+    result = await session.execute(statement)
+    return list(result.scalars())
+
+
 async def count_rows(
     session: AsyncSession,
     *,
