@@ -5851,7 +5851,7 @@ git commit -m "docs: document BM25 production retrieval"
 
 - Modify: `plan.md` (check off all tasks and record evidence)
 
-- [ ] **Step 1: Run the full unit suite.**
+- [x] **Step 1: Run the full unit suite.**
 
 ```bash
 uv run pytest backend/tests/unit -q
@@ -5860,7 +5860,7 @@ uv run pytest backend/tests/unit -q
 Expected: all pass. Do not run the full integration suite until the database cleanup plan
 below is applied.
 
-- [ ] **Step 2: Run the BM25-focused integration tests.**
+- [x] **Step 2: Run the BM25-focused integration tests.**
 
 ```bash
 uv run pytest backend/tests/integration/test_bm25_production.py \
@@ -5869,7 +5869,7 @@ uv run pytest backend/tests/integration/test_bm25_production.py \
 
 Expected: all pass. Clean any non-default tenant rows created by the run.
 
-- [ ] **Step 3: Run Ruff.**
+- [x] **Step 3: Run Ruff.**
 
 ```bash
 uv run ruff check .
@@ -5878,7 +5878,7 @@ uv run ruff format --check .
 
 Expected: no violations.
 
-- [ ] **Step 4: Verify the index and database counts.**
+- [x] **Step 4: Verify the index and database counts.**
 
 ```bash
 uv run python scripts/build_bm25_index.py --check
@@ -5926,7 +5926,7 @@ PY
 Expected: `34378` documents and `136383` chunks for the default tenant/KB, and the BM25
 check reports current.
 
-- [ ] **Step 5: Verify the evaluation output.**
+- [x] **Step 5: Verify the evaluation output.**
 
 ```bash
 uv run python - <<'PY'
@@ -5940,7 +5940,7 @@ PY
 
 Confirm the acceptance targets from Task 9.
 
-- [ ] **Step 6: Verify the holdout was untouched and no index artifacts are staged.**
+- [x] **Step 6: Verify the holdout was untouched and no index artifacts are staged.**
 
 ```bash
 git status --short
@@ -5950,7 +5950,7 @@ git diff --stat
 Expected: no `data/indexes/` files staged; no holdout files modified; only intended source,
 tests, docs, `plan.md`, and dependency files.
 
-- [ ] **Step 7: Record completion in `plan.md` and commit.**
+- [x] **Step 7: Record completion in `plan.md` and commit.**
 
 Mark every Block 4 checkbox complete, add the measured metrics and index version, and
 commit:
@@ -5966,27 +5966,39 @@ Do not push or merge unless the user explicitly asks.
 
 ### Block 4 Acceptance Checklist
 
-- [ ] `bm25s` and `PyStemmer` are production dependencies; lockfile is current.
-- [ ] Settings exist for index root, `k1`, `b`, and retention.
-- [ ] `data/indexes/` is ignored and no index artifacts are committed.
-- [ ] Manifest, catalog, fingerprint, tokenizer, and snapshot are implemented.
-- [ ] Version directories are immutable; `current.json` publish is atomic.
-- [ ] A failed build leaves the active index unchanged.
-- [ ] Retention keeps the active version plus the previous two.
-- [ ] Per-index build locking prevents concurrent rebuilds.
-- [ ] `--check` detects fingerprint mismatch and reports a rebuild command.
-- [ ] Missing/invalid/stale indexes fail fast; no PostgreSQL fallback.
-- [ ] Retriever validates `top_k`, returns `[]` for blank/stopword-only queries.
-- [ ] Source filters use adaptive overfetch and return top-k when possible.
-- [ ] Final content is fetched from PostgreSQL constrained by tenant/KB and source type.
-- [ ] Missing selected chunks raise `BM25IndexStale` with a rebuild command.
-- [ ] Rebuild/check CLI, query CLI, and evaluation mode work.
-- [ ] Development metrics reproduce Block 3.5 within a reasonable tolerance.
-- [ ] Top-50 BM25 latency p95 is below 200 ms.
-- [ ] Unit, focused integration, and Ruff checks pass.
-- [ ] Database counts remain clean; no non-default tenant rows remain.
-- [ ] Holdout remains untouched.
-- [ ] Architecture doc, ADR, README, and `plan.md` are updated.
+- [x] `bm25s` and `PyStemmer` are production dependencies; lockfile is current.
+- [x] Settings exist for index root, `k1`, `b`, and retention.
+- [x] `data/indexes/` is ignored and no index artifacts are committed.
+- [x] Manifest, catalog, fingerprint, tokenizer, and snapshot are implemented.
+- [x] Version directories are immutable; `current.json` publish is atomic.
+- [x] A failed build leaves the active index unchanged.
+- [x] Retention keeps the active version plus the previous two.
+- [x] Per-index build locking prevents concurrent rebuilds.
+- [x] `--check` detects fingerprint mismatch and reports a rebuild command.
+- [x] Missing/invalid/stale indexes fail fast; no PostgreSQL fallback.
+- [x] Retriever validates `top_k`, returns `[]` for blank/stopword-only queries.
+- [x] Source filters use adaptive overfetch and return top-k when possible.
+- [x] Final content is fetched from PostgreSQL constrained by tenant/KB and source type.
+- [x] Missing selected chunks raise `BM25IndexStale` with a rebuild command.
+- [x] Rebuild/check CLI, query CLI, and evaluation mode work.
+- [x] Development metrics reproduce Block 3.5 within a reasonable tolerance.
+- [x] Top-50 BM25 latency p95 is below 200 ms.
+- [x] Unit, focused integration, and Ruff checks pass.
+- [x] Database counts remain clean; no non-default tenant rows remain.
+- [x] Holdout remains untouched.
+- [x] Architecture doc, ADR, README, and `plan.md` are updated.
+
+### Block 4 Verification Evidence
+
+Verified on 2026-11-14 from branch `block-4-bm25-production` (base `1990047`).
+
+- Unit suite: `133 passed` (`uv run pytest backend/tests/unit -q`).
+- Focused integration: `8 passed` (`test_bm25_production.py`, `test_database.py`).
+- Ruff: `All checks passed!`; `82 files already formatted`.
+- Index version: `20261114T114342596160Z-9b59d71b6d36`; `--check` reported current at `row_count=136383`.
+- Database: default tenant/KB has `34378` documents and `136383` chunks; after cleanup `0` non-default documents and `0` non-default chunks remain.
+- Development evaluation (169 questions): recall@1 `0.5138`, recall@5 `0.7310`, recall@10 `0.7776`, recall@20 `0.8494`, MRR `0.6771`; top-50 latency p50 `10.4 ms`, p95 `11.3 ms`, max `12.1 ms`.
+- Holdout untouched; `data/indexes/`, the metrics JSON, and `.superpowers/` remain untracked.
 
 ### Block 4 Risks
 
