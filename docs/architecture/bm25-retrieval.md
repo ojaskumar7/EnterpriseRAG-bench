@@ -151,8 +151,8 @@ The rename and pointer replace are atomic filesystem operations. A failure befor
 pointer replace leaves the previous `current.json` untouched, so readers keep the old
 version. A failed build removes its temporary directory. A failure after the version
 rename but before the pointer replace can leave an inactive orphan version directory; it is
-never served and is removed by a later retention pass once it falls outside the retained
-window. A version that already exists is never overwritten.
+never served, and only a later retention pass that pushes it outside the retained window
+will remove it. A version that already exists is never overwritten.
 
 ## Runtime Flow
 
@@ -187,6 +187,7 @@ tenant/KB-specific rebuild command rather than returning a partial result.
 |---|---|
 | `current.json` missing | `BM25IndexUnavailable` |
 | pointer or manifest invalid / hash mismatch | `BM25IndexStale` |
+| `catalog.jsonl` missing | `BM25IndexUnavailable` |
 | catalog hash or count mismatch | `BM25IndexStale` |
 | index files missing or unreadable | `BM25IndexUnavailable` |
 | selected chunk missing from PostgreSQL | `BM25IndexStale` |
