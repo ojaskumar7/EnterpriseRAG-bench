@@ -102,3 +102,23 @@ async def evaluate_retriever(
         k_values=k_values,
     )
     return {"metrics": metrics, "per_question": per_question}
+
+
+def latency_summary(durations_ms: Sequence[float]) -> dict[str, float | int]:
+    if not durations_ms:
+        raise ValueError("durations_ms must not be empty")
+    ordered = sorted(durations_ms)
+
+    def percentile(fraction: float) -> float:
+        position = (len(ordered) - 1) * fraction
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    return {
+        "count": len(ordered),
+        "p50_ms": percentile(0.50),
+        "p95_ms": percentile(0.95),
+        "max_ms": ordered[-1],
+    }

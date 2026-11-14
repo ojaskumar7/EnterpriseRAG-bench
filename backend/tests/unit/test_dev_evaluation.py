@@ -10,7 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.evaluation.dev import DevQuestion, evaluate_retriever, read_dev_questions
+from app.evaluation.dev import (
+    DevQuestion,
+    evaluate_retriever,
+    latency_summary,
+    read_dev_questions,
+)
 from app.retrieval.types import RetrievedChunk
 
 
@@ -80,6 +85,15 @@ async def test_evaluate_retriever_reports_metrics() -> None:
     assert report["metrics"]["mrr"] == 1.0
 
 
+def test_latency_summary_reports_percentiles() -> None:
+    summary = latency_summary([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    assert summary["count"] == 5
+    assert summary["p50_ms"] == 3.0
+    assert summary["p95_ms"] == pytest.approx(4.8)
+    assert summary["max_ms"] == 5.0
+
+
 def _load_eval_cli():
     path = Path(__file__).resolve().parents[3] / "scripts" / "eval_retrieval_dev.py"
     spec = importlib.util.spec_from_file_location("eval_retrieval_dev", path)
@@ -107,9 +121,16 @@ async def test_run_all_mode_wires_all_retrievers(tmp_path: Path, monkeypatch) ->
             self.device = "cpu"
             self.dtype = "float32"
 
+    class FakeIndexManager:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
     class FakeRetriever:
         def __init__(self, *args, **kwargs) -> None:
             pass
+
+        async def retrieve(self, query, *, top_k=10, source_types=None):
+            return []
 
     evaluated_labels = []
 
@@ -128,17 +149,21 @@ async def test_run_all_mode_wires_all_retrievers(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(cli, "DenseRetriever", FakeRetriever)
     monkeypatch.setattr(cli, "LexicalRetriever", FakeRetriever)
     monkeypatch.setattr(cli, "HybridRetriever", FakeRetriever)
+    monkeypatch.setattr(cli, "BM25Retriever", FakeRetriever)
+    monkeypatch.setattr(cli, "BM25IndexManager", FakeIndexManager)
 
     settings = SimpleNamespace(
         embedding_dimension=1024,
         embedding_batch_size=32,
         embedding_query_instruction="",
+        bm25_index_root=tmp_path / "bm25",
     )
     args = SimpleNamespace(
         mode="all",
         questions=questions_path,
         output=output_path,
         top_k=20,
+        latency_top_k=50,
         candidate_k=50,
         rrf_k=60,
         dense_weight=1.0,
@@ -154,6 +179,8 @@ async def test_run_all_mode_wires_all_retrievers(tmp_path: Path, monkeypatch) ->
 
     output = await cli.run(args, settings)
 
-    assert set(output["modes"]) == {"dense", "lexical", "hybrid"}
-    assert evaluated_labels == ["dense", "lexical", "hybrid"]
+    assert set(output["modes"]) == {"dense", "lexical", "hybrid", "bm25"}
+    assert evaluated_labels == ["dense", "lexical", "hybrid", "bm25"]
+    assert output["modes"]["bm25"]["latency_top50"]["count"] == 1
+    assert "latency_top50" not in output["modes"]["dense"]
     assert output_path.is_file()

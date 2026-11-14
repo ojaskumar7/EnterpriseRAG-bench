@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate dense, lexical, and hybrid retrieval on the development split."""
+"""Evaluate dense, lexical, hybrid, and BM25 retrieval on the development split."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,13 +17,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from app.db.session import build_engine, build_session_factory  # noqa: E402
 from app.embeddings.bge import BGEEmbeddingProvider  # noqa: E402
-from app.evaluation.dev import evaluate_retriever, read_dev_questions  # noqa: E402
+from app.evaluation.dev import (  # noqa: E402
+    evaluate_retriever,
+    latency_summary,
+    read_dev_questions,
+)
+from app.retrieval.bm25 import BM25Retriever  # noqa: E402
+from app.retrieval.bm25_index import BM25IndexManager  # noqa: E402
 from app.retrieval.dense import DenseRetriever  # noqa: E402
 from app.retrieval.hybrid import HybridRetriever  # noqa: E402
 from app.retrieval.lexical import LexicalRetriever  # noqa: E402
 from app.settings import Settings, get_settings  # noqa: E402
 
-MODES = ("dense", "lexical", "hybrid")
+MODES = ("dense", "lexical", "hybrid", "bm25")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("data/processed/retrieval_dev_metrics.json"),
     )
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--latency-top-k", type=int, default=50)
     parser.add_argument("--candidate-k", type=int, default=50)
     parser.add_argument("--rrf-k", type=int, default=60)
     parser.add_argument("--dense-weight", type=float, default=1.0)
@@ -57,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
 async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]:
     if args.top_k <= 0:
         raise ValueError("top-k must be positive")
+    if args.latency_top_k <= 0:
+        raise ValueError("latency-top-k must be positive")
     if args.candidate_k <= 0:
         raise ValueError("candidate-k must be positive")
     if args.rrf_k <= 0:
@@ -71,7 +81,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
         raise ValueError("no development questions found")
 
     provider = None
-    if args.mode != "lexical":
+    if args.mode in {"dense", "hybrid", "all"}:
         provider = BGEEmbeddingProvider(
             model_name=args.model,
             dimension=settings.embedding_dimension,
@@ -98,7 +108,13 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
                 knowledge_base_id=args.knowledge_base_id,
             )
 
-        retriever_by_mode = {"lexical": lexical}
+        bm25 = BM25Retriever(
+            BM25IndexManager(settings.bm25_index_root),
+            session_factory,
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        retriever_by_mode = {"lexical": lexical, "bm25": bm25}
         if dense is not None:
             retriever_by_mode["dense"] = dense
             retriever_by_mode["hybrid"] = HybridRetriever(
@@ -120,6 +136,13 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
                 progress_every=args.progress_every,
                 label=mode,
             )
+            if mode == "bm25":
+                durations_ms: list[float] = []
+                for question in questions:
+                    start = time.perf_counter()
+                    await bm25.retrieve(question.question, top_k=args.latency_top_k)
+                    durations_ms.append((time.perf_counter() - start) * 1000.0)
+                reports[mode]["latency_top50"] = latency_summary(durations_ms)
     finally:
         await engine.dispose()
 
