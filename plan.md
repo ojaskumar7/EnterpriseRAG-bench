@@ -3663,6 +3663,2348 @@ git commit -m "docs: complete block 3 hybrid retrieval"
 
 ### Next Block Preview
 
-Block 4 should add evidence selection and context construction over the fused
-retrieval results. Do not start Block 4 until Block 3 verification is complete and
-the hybrid metrics are documented.
+Block 3.5 changed the retrieval decision. Exact BM25 over title plus content is the
+strongest single retriever on the development split (recall@20 0.8494, MRR 0.6771) and
+beats the PostgreSQL FTS + RRF hybrid on every headline metric. Block 4 therefore
+productionizes BM25 itself instead of building on hybrid fusion. Evidence selection and
+context construction move to Block 5.
+
+## Block 4 Implementation Plan — BM25 Productionization
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Do not start implementation until the user reviews this plan.
+
+**Goal:** Turn the Block 3.5 benchmark into a production BM25 retrieval path with a
+versioned, per-tenant/per-knowledge-base index, atomic rebuilds, a query CLI, and a
+development evaluation mode, without adding API or generation code.
+
+**Architecture:** Build immutable `bm25s` indexes from PostgreSQL chunks, publish each
+version under `data/indexes/bm25/<tenant>/<knowledge-base>/versions/`, switch readers with
+an atomic `current.json` pointer, and retrieve through a `BM25Retriever` that uses adaptive
+overfetch for `source_types` filters and fetches final chunk content from PostgreSQL.
+
+**Tech Stack:** Python 3.12, `bm25s` 0.3.16, PyStemmer, PostgreSQL, SQLAlchemy async,
+pytest, Ruff.
+
+**Prerequisite:** Block 3.5 merged at `78194e1`; start Block 4 from an updated `main`.
+The Block 3.5 branch/worktree is retained for audit but is not the Block 4 base.
+
+**Estimated effort:** 18–24 hours, including implementation, tests, full index build, and
+the 169-question development evaluation.
+
+### Approved Block 4 Decisions
+
+1. **BM25-only.** Do not tune or productionize hybrid fusion in this block. Keep existing
+   dense, lexical, and hybrid code behavior unchanged.
+2. **In-process `bm25s`.** One loaded index serves queries in the application process; no
+   external search service.
+3. **Content-only corpus.** Document text is `title + "\n" + content`; title is not
+   separately weighted. Use `k1=1.5`, `b=0.75`, `method="lucene"`, English stopwords, and
+   `PyStemmer("english")`.
+4. **Per tenant/KB index.** Path:
+   `data/indexes/bm25/<tenant_id>/<knowledge_base_id>/`.
+5. **Versioned immutable indexes.** Each build writes a new version directory; readers
+   use `current.json`. Successful publish is atomic; failed builds leave the current index
+   untouched. Keep the active version plus the previous two (`retention=2` previous, three
+   total including active).
+6. **Batch rebuild.** No incremental index updates. Ingestion changes require a rebuild.
+7. **Adaptive overfetch.** Without a source filter, request `top_k`. With a filter, start
+   at `max(top_k * 4, top_k)` (bounded by index size) and double until enough filtered
+   chunks are found or the index is exhausted.
+8. **Fail fast.** Missing, invalid, or stale indexes raise actionable errors. There is no
+   PostgreSQL FTS fallback.
+9. **SQL is the source of content.** The catalog stores only chunk identity, source type,
+   title, chunk index, and content hash. Final content and metadata are fetched from
+   PostgreSQL by `chunk_id`, always constrained by tenant/KB (and source filter).
+10. **Full production slice.** Include retriever, index primitives, builder, rebuild/check
+    CLI, query CLI, evaluation mode, tests, docs, ADR, and README updates.
+
+### Out of Scope
+
+- API endpoints, FastAPI wiring, authentication, and background workers.
+- Answer generation, citations, abstention, evidence selection, and context packing.
+- Reranking, hybrid weight tuning, dense changes, and PostgreSQL FTS changes.
+- Incremental BM25 updates or change-data-capture.
+- Holdout evaluation and official benchmark claims.
+- Distributed index serving or external search engines.
+
+### Global Constraints
+
+- Never run the 42-question holdout. Use the 169-question development split only.
+- Use the same tokenizer and BM25 parameters for build and query.
+- Do not add hardcoded corpus counts to production code. Counts come from the build.
+- Do not commit index artifacts. Add `data/indexes/` to `.gitignore`.
+- Do not add new third-party libraries beyond promoting `bm25s` and `PyStemmer` to
+  production dependencies.
+- Keep `RetrievedChunk` and retriever interfaces compatible with existing code.
+- All errors must name the tenant/KB and include a rebuild command when actionable.
+- Unit tests must not require the full 136,383-chunk corpus or an embedding model.
+- Integration tests may use the real DB but must not leave non-default tenant rows.
+- Run `ruff check`, `ruff format --check`, and tests before claiming completion.
+- Do not push or merge unless the user explicitly asks.
+
+### File Map
+
+Create:
+
+- `backend/app/retrieval/bm25_index.py` — manifest, catalog, fingerprint, tokenizer,
+  snapshot, version store, manager, BM25 errors.
+- `backend/app/retrieval/bm25_builder.py` — corpus loader, build lock, build/publish.
+- `backend/app/retrieval/bm25.py` — `BM25Retriever` and adaptive overfetch.
+- `scripts/build_bm25_index.py` — rebuild and `--check` CLI.
+- `scripts/bm25_search.py` — query CLI.
+- `backend/tests/unit/test_bm25_index.py` — manifest, catalog, tokenizer, store tests.
+- `backend/tests/unit/test_bm25_builder.py` — tiny corpus build/publish/retention tests.
+- `backend/tests/unit/test_bm25_retriever.py` — filtering, overfetch, errors, blank query.
+- `backend/tests/integration/test_bm25_production.py` — DB lookup isolation and CLI
+  behavior; the real full-corpus build is verified operationally in Task 9.
+- `docs/architecture/bm25-retrieval.md` — production architecture and operations.
+- `docs/design-decisions/0004-bm25-production-backend.md` — decision record.
+
+Modify:
+
+- `pyproject.toml` and `uv.lock` — promote `bm25s` and `PyStemmer`.
+- `backend/app/settings.py` and `backend/tests/unit/test_settings.py` — BM25 settings.
+- `backend/app/db/repositories.py` and `backend/tests/integration/test_database.py` —
+  `get_chunks_by_ids`.
+- `scripts/eval_retrieval_dev.py` — add `bm25` mode, `all` inclusion, and top-50 latency.
+- `backend/app/evaluation/dev.py` and `backend/tests/unit/test_dev_evaluation.py` — latency
+  summary helper.
+- `README.md` — status, capabilities, roadmap, limitations, documentation links.
+- `.gitignore` — ignore generated BM25 indexes.
+- `plan.md` — check off tasks and record measured results.
+
+### Interfaces and Invariants
+
+```python
+class BM25IndexError(RuntimeError): ...
+class BM25IndexUnavailable(BM25IndexError): ...
+class BM25IndexStale(BM25IndexError): ...
+
+@dataclass(frozen=True)
+class BM25Manifest:
+    schema_version: int
+    version: str
+    tenant_id: str
+    knowledge_base_id: str
+    created_at: str
+    document_count: int
+    row_count: int
+    corpus_fingerprint: str
+    catalog_sha256: str
+    k1: float
+    b: float
+    method: str
+    stopwords: str
+    stemmer: str
+    bm25s_version: str
+    pystemmer_version: str
+
+@dataclass(frozen=True)
+class BM25CatalogEntry:
+    row_index: int
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content_hash: str
+
+@dataclass(frozen=True)
+class BM25IndexSnapshot:
+    manifest: BM25Manifest
+    catalog: tuple[BM25CatalogEntry, ...]
+    index: bm25s.BM25
+    stemmer: Any
+
+class BM25IndexStore:
+    def __init__(self, index_root: Path, *, retention: int = 2) -> None: ...
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot: ...
+    def check(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        expected_fingerprint: str,
+    ) -> BM25Manifest: ...
+    def publish(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        temp_dir: Path,
+        manifest: BM25Manifest,
+    ) -> BM25Manifest: ...
+
+class BM25IndexManager:
+    def __init__(self, index_root: Path | str, *, retention: int = 2) -> None: ...
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot: ...
+    def reload(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot: ...
+    def check(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        expected_fingerprint: str,
+    ) -> BM25Manifest: ...
+    def publish(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        temp_dir: Path,
+        manifest: BM25Manifest,
+    ) -> BM25Manifest: ...
+
+class BM25Retriever:
+    def __init__(
+        self,
+        manager: BM25IndexManager,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        tenant_id: uuid.UUID,
+        knowledge_base_id: uuid.UUID,
+    ) -> None: ...
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]: ...
+```
+
+Invariants:
+
+- `len(catalog) == manifest.row_count == bm25s` row count.
+- `catalog[row_index].chunk_id` is the row identity used by search results.
+- Catalog order is `ORDER BY chunk_id`, so `row_index` is deterministic.
+- `corpus_fingerprint` is order-independent and covers `(chunk_id, content_hash, title)`.
+- `current.json` contains `{"version": "...", "manifest_sha256": "..."}`.
+- A published version is never modified.
+- The active snapshot is immutable and safe to share across concurrent queries.
+- Missing selected chunks mean the index is stale relative to PostgreSQL.
+
+### Error Contract
+
+| Condition | Error | Message includes |
+|---|---|---|
+| `current.json` missing | `BM25IndexUnavailable` | tenant, KB, rebuild command |
+| pointer/manifest invalid or hash mismatch | `BM25IndexStale` | tenant, KB, rebuild command |
+| catalog count/hash mismatch | `BM25IndexStale` | version, counts, rebuild command |
+| index files missing or unreadable | `BM25IndexUnavailable` | version path, rebuild command |
+| selected chunk missing from PostgreSQL | `BM25IndexStale` | missing count, tenant, KB, rebuild command |
+| blank/stopword-only query | no error | returns `[]` |
+| `top_k <= 0` | `ValueError("top_k must be positive")` | validation |
+
+Rebuild command format:
+
+```text
+uv run python scripts/build_bm25_index.py --tenant-id <tenant_id> --knowledge-base-id <kb_id>
+```
+
+---
+
+## Task 1: Promote Dependencies and Add Settings
+
+**Files:**
+
+- Modify: `pyproject.toml`, `uv.lock`, `backend/app/settings.py`,
+  `backend/tests/unit/test_settings.py`, `.gitignore`
+
+- [x] **Step 1: Write the failing settings test.**
+
+Add to `backend/tests/unit/test_settings.py`:
+
+```python
+from pathlib import Path
+
+from app.settings import Settings
+
+
+def test_bm25_settings_defaults() -> None:
+    settings = Settings()
+
+    assert settings.bm25_index_root == Path("data/indexes/bm25")
+    assert settings.bm25_k1 == 1.5
+    assert settings.bm25_b == 0.75
+    assert settings.bm25_retention == 2
+```
+
+- [x] **Step 2: Run the test and verify it fails.**
+
+```bash
+uv run pytest backend/tests/unit/test_settings.py -q
+```
+
+Expected: failure because the settings fields do not exist.
+
+- [x] **Step 3: Add settings and promote dependencies.**
+
+In `backend/app/settings.py`, import `Path` and add:
+
+```python
+from pathlib import Path
+
+    bm25_index_root: Path = Path("data/indexes/bm25")
+    bm25_k1: float = Field(default=1.5, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0, le=1)
+    bm25_retention: int = Field(default=2, ge=1)
+```
+
+In `pyproject.toml`, move `bm25s>=0.3.16` and `pystemmer>=3.1.0` from
+`[dependency-groups].dev` into `[project].dependencies`. Keep the dev group for test
+tools. Run:
+
+```bash
+uv lock
+uv sync
+```
+
+Add to `.gitignore`:
+
+```text
+data/indexes/
+```
+
+- [x] **Step 4: Run the focused test and dependency check.**
+
+```bash
+uv run pytest backend/tests/unit/test_settings.py -q
+uv lock --check
+```
+
+Expected: all pass; lockfile is current.
+
+- [x] **Step 5: Commit.**
+
+```bash
+git add pyproject.toml uv.lock backend/app/settings.py \
+  backend/tests/unit/test_settings.py .gitignore
+git commit -m "build: promote bm25 runtime dependencies"
+```
+
+---
+
+## Task 2: Implement BM25 Primitives
+
+**Files:**
+
+- Create: `backend/app/retrieval/bm25_index.py`
+- Create: `backend/tests/unit/test_bm25_index.py`
+
+- [x] **Step 1: Write failing tests for fingerprints, manifests, catalogs, and
+  tokenization.**
+
+```python
+from pathlib import Path
+
+import Stemmer
+
+from app.retrieval.bm25_index import (
+    BM25CatalogEntry,
+    BM25Manifest,
+    corpus_fingerprint,
+    read_catalog,
+    tokenize_bm25,
+    write_catalog,
+)
+
+
+def test_corpus_fingerprint_is_order_independent_and_title_sensitive() -> None:
+    rows = [
+        ("chunk-a", "hash-a", "Alpha"),
+        ("chunk-b", "hash-b", "Beta"),
+    ]
+
+    assert corpus_fingerprint(rows) == corpus_fingerprint(list(reversed(rows)))
+    assert corpus_fingerprint(rows) != corpus_fingerprint(
+        [("chunk-a", "hash-a", "Alpha changed"), ("chunk-b", "hash-b", "Beta")]
+    )
+
+
+def test_manifest_round_trip() -> None:
+    manifest = BM25Manifest(
+        schema_version=1,
+        version="20261112T083000000000Z-abcdef123456",
+        tenant_id="tenant",
+        knowledge_base_id="kb",
+        created_at="2026-11-12T08:30:00+00:00",
+        document_count=2,
+        row_count=3,
+        corpus_fingerprint="f" * 64,
+        catalog_sha256="c" * 64,
+        k1=1.5,
+        b=0.75,
+        method="lucene",
+        stopwords="english",
+        stemmer="english",
+        bm25s_version="0.3.16",
+        pystemmer_version="3.1.0",
+    )
+
+    assert BM25Manifest.from_dict(manifest.to_dict()) == manifest
+
+
+def test_catalog_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.jsonl"
+    entries = [
+        BM25CatalogEntry(0, "chunk-a", "doc-a", "pdf", "Alpha", 0, "hash-a"),
+        BM25CatalogEntry(1, "chunk-b", "doc-b", "html", "Beta", 2, "hash-b"),
+    ]
+
+    write_catalog(path, entries)
+
+    assert read_catalog(path) == entries
+
+
+def test_tokenize_bm25_stems_and_removes_stopwords() -> None:
+    stemmer = Stemmer.Stemmer("english")
+
+    tokens = tokenize_bm25(["The runners are running"], stemmer)[0]
+
+    assert "the" not in tokens
+    assert "are" not in tokens
+    assert "run" in tokens
+```
+
+- [x] **Step 2: Run the tests and verify they fail.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_index.py -q
+```
+
+- [x] **Step 3: Implement the primitives.**
+
+Create `backend/app/retrieval/bm25_index.py` with constants, errors, dataclasses, hashing,
+catalog IO, manifest IO, and tokenization:
+
+```python
+"""BM25 index metadata, catalog, tokenization, and version storage."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import uuid
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from importlib.metadata import version
+from pathlib import Path
+from typing import Any
+
+import bm25s
+import Stemmer
+
+BM25_SCHEMA_VERSION = 1
+BM25_K1 = 1.5
+BM25_B = 0.75
+BM25_METHOD = "lucene"
+BM25_STOPWORDS = "english"
+BM25_STEMMER = "english"
+BM25_INDEX_DIR = "index"
+BM25_MANIFEST_FILE = "manifest.json"
+BM25_CATALOG_FILE = "catalog.jsonl"
+BM25_POINTER_FILE = "current.json"
+
+
+class BM25IndexError(RuntimeError):
+    """Base error for BM25 index operations."""
+
+
+class BM25IndexUnavailable(BM25IndexError):
+    """The requested index is missing or cannot be loaded."""
+
+
+class BM25IndexStale(BM25IndexError):
+    """The index is inconsistent with its manifest or database."""
+
+
+def rebuild_command(tenant_id: str, knowledge_base_id: str) -> str:
+    return (
+        "uv run python scripts/build_bm25_index.py "
+        f"--tenant-id {tenant_id} --knowledge-base-id {knowledge_base_id}"
+    )
+
+
+@dataclass(frozen=True)
+class BM25CatalogEntry:
+    row_index: int
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content_hash: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> BM25CatalogEntry:
+        return cls(
+            row_index=int(data["row_index"]),
+            chunk_id=str(data["chunk_id"]),
+            doc_id=str(data["doc_id"]),
+            source_type=str(data["source_type"]),
+            title=str(data["title"]),
+            chunk_index=int(data["chunk_index"]),
+            content_hash=str(data["content_hash"]),
+        )
+
+
+@dataclass(frozen=True)
+class BM25Manifest:
+    schema_version: int
+    version: str
+    tenant_id: str
+    knowledge_base_id: str
+    created_at: str
+    document_count: int
+    row_count: int
+    corpus_fingerprint: str
+    catalog_sha256: str
+    k1: float
+    b: float
+    method: str
+    stopwords: str
+    stemmer: str
+    bm25s_version: str
+    pystemmer_version: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> BM25Manifest:
+        return cls(
+            schema_version=int(data["schema_version"]),
+            version=str(data["version"]),
+            tenant_id=str(data["tenant_id"]),
+            knowledge_base_id=str(data["knowledge_base_id"]),
+            created_at=str(data["created_at"]),
+            document_count=int(data["document_count"]),
+            row_count=int(data["row_count"]),
+            corpus_fingerprint=str(data["corpus_fingerprint"]),
+            catalog_sha256=str(data["catalog_sha256"]),
+            k1=float(data["k1"]),
+            b=float(data["b"]),
+            method=str(data["method"]),
+            stopwords=str(data["stopwords"]),
+            stemmer=str(data["stemmer"]),
+            bm25s_version=str(data["bm25s_version"]),
+            pystemmer_version=str(data["pystemmer_version"]),
+        )
+
+
+def corpus_fingerprint(rows: Iterable[tuple[str, str, str]]) -> str:
+    digest = hashlib.sha256()
+    for chunk_id, content_hash, title in sorted(rows):
+        digest.update(chunk_id.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content_hash.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(title.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def tokenize_bm25(texts: Sequence[str], stemmer: Any) -> list[list[str]]:
+    tokenized = bm25s.tokenize(
+        list(texts),
+        stopwords=BM25_STOPWORDS,
+        stemmer=stemmer,
+        return_ids=False,
+        show_progress=False,
+    )
+    return [[str(token) for token in row if str(token).strip()] for row in tokenized]
+
+
+def write_catalog(path: Path, entries: Iterable[BM25CatalogEntry]) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry.to_dict(), sort_keys=True) + "\n")
+
+
+def read_catalog(path: Path) -> list[BM25CatalogEntry]:
+    entries: list[BM25CatalogEntry] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+                entries.append(BM25CatalogEntry.from_dict(raw))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                raise BM25IndexStale(f"invalid catalog entry on line {line_number}") from exc
+    return entries
+
+
+def write_manifest(path: Path, manifest: BM25Manifest) -> None:
+    path.write_text(
+        json.dumps(manifest.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class BM25IndexSnapshot:
+    manifest: BM25Manifest
+    catalog: tuple[BM25CatalogEntry, ...]
+    index: bm25s.BM25
+    stemmer: Any
+
+    @property
+    def row_count(self) -> int:
+        return len(self.catalog)
+
+    def tokenize(self, query: str) -> list[str]:
+        tokenized = tokenize_bm25([query], self.stemmer)
+        return tokenized[0] if tokenized else []
+
+    def search(self, tokens: Sequence[str], k: int) -> tuple[list[int], list[float]]:
+        if not tokens or not self.catalog:
+            return [], []
+        indices, scores = self.index.retrieve(
+            [list(tokens)],
+            k=min(k, self.row_count),
+            show_progress=False,
+        )
+        row_indices = [int(index) for index in indices[0]]
+        if any(index < 0 or index >= self.row_count for index in row_indices):
+            raise BM25IndexStale(
+                f"BM25 index contains an out-of-range row for tenant "
+                f"{self.manifest.tenant_id} and KB {self.manifest.knowledge_base_id}; "
+                f"rebuild with: "
+                f"{rebuild_command(self.manifest.tenant_id, self.manifest.knowledge_base_id)}"
+            )
+        return row_indices, [float(score) for score in scores[0]]
+```
+
+- [x] **Step 4: Run the focused tests and Ruff.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_index.py -q
+uv run ruff check backend/app/retrieval/bm25_index.py \
+  backend/tests/unit/test_bm25_index.py
+```
+
+- [x] **Step 5: Commit.**
+
+```bash
+git add backend/app/retrieval/bm25_index.py backend/tests/unit/test_bm25_index.py
+git commit -m "feat: add BM25 index primitives"
+```
+
+---
+
+## Task 3: Implement Version Storage and Atomic Publish
+
+**Files:**
+
+- Modify: `backend/app/retrieval/bm25_index.py`
+- Modify: `backend/tests/unit/test_bm25_index.py`
+
+- [x] **Step 1: Write failing tests for publish, load, pointer validation, cache, and
+  retention.**
+
+Use a tiny real `bm25s` index in the test helper:
+
+```python
+import json
+from pathlib import Path
+
+import bm25s
+import Stemmer
+
+from app.retrieval.bm25_index import (
+    BM25_CATALOG_FILE,
+    BM25_INDEX_DIR,
+    BM25_K1,
+    BM25_MANIFEST_FILE,
+    BM25_METHOD,
+    BM25_B,
+    BM25_SCHEMA_VERSION,
+    BM25_STEMMER,
+    BM25_STOPWORDS,
+    BM25CatalogEntry,
+    BM25IndexManager,
+    BM25IndexStale,
+    BM25Manifest,
+    corpus_fingerprint,
+    sha256_file,
+    tokenize_bm25,
+    write_catalog,
+    write_manifest,
+)
+
+
+def _tiny_version(root: Path, tenant: str, kb: str, version: str) -> tuple[Path, BM25Manifest]:
+    docs = [
+        ("chunk-1", "doc-1", "Alpha needle", "Alpha", "pdf"),
+        ("chunk-2", "doc-2", "Beta needle", "Beta", "html"),
+    ]
+    temp = root / tenant / kb / f".building-{version}"
+    temp.mkdir(parents=True)
+    stemmer = Stemmer.Stemmer("english")
+    tokens = tokenize_bm25([f"{title}\n{content}" for _, _, content, title, _ in docs], stemmer)
+    index = bm25s.BM25(k1=BM25_K1, b=BM25_B, method=BM25_METHOD)
+    index.index(tokens, show_progress=False)
+    index.save(temp / BM25_INDEX_DIR, show_progress=False)
+    entries = [
+        BM25CatalogEntry(i, chunk_id, doc_id, source_type, title, 0, f"hash-{i}")
+        for i, (chunk_id, doc_id, _, title, source_type) in enumerate(docs)
+    ]
+    write_catalog(temp / BM25_CATALOG_FILE, entries)
+    manifest = BM25Manifest(
+        schema_version=BM25_SCHEMA_VERSION,
+        version=version,
+        tenant_id=tenant,
+        knowledge_base_id=kb,
+        created_at="2026-11-12T08:30:00+00:00",
+        document_count=2,
+        row_count=2,
+        corpus_fingerprint=corpus_fingerprint(
+            (entry.chunk_id, entry.content_hash, entry.title) for entry in entries
+        ),
+        catalog_sha256=sha256_file(temp / BM25_CATALOG_FILE),
+        k1=BM25_K1,
+        b=BM25_B,
+        method=BM25_METHOD,
+        stopwords=BM25_STOPWORDS,
+        stemmer=BM25_STEMMER,
+        bm25s_version="0.3.16",
+        pystemmer_version="3.1.0",
+    )
+    write_manifest(temp / BM25_MANIFEST_FILE, manifest)
+    return temp, manifest
+
+
+def test_publish_load_and_reload(tmp_path: Path) -> None:
+    manager = BM25IndexManager(tmp_path, retention=2)
+    temp, manifest = _tiny_version(tmp_path, "tenant", "kb", "20261112T083000000000Z-111111111111")
+
+    manager.publish(tenant_id="tenant", knowledge_base_id="kb", temp_dir=temp, manifest=manifest)
+
+    snapshot = manager.load(tenant_id="tenant", knowledge_base_id="kb")
+    assert snapshot.manifest == manifest
+    assert snapshot.row_count == 2
+    assert snapshot.search(snapshot.tokenize("needle"), 2)[0] == [0, 1]
+
+    pointer = json.loads((tmp_path / "tenant" / "kb" / "current.json").read_text())
+    assert pointer["version"] == manifest.version
+
+
+def test_retention_keeps_active_and_previous_versions(tmp_path: Path) -> None:
+    manager = BM25IndexManager(tmp_path, retention=2)
+    for index in range(4):
+        version = f"20261112T08300{index}000000Z-{index:012d}"
+        temp, manifest = _tiny_version(tmp_path, "tenant", "kb", version)
+        manager.publish(
+            tenant_id="tenant",
+            knowledge_base_id="kb",
+            temp_dir=temp,
+            manifest=manifest,
+        )
+
+    versions = sorted(
+        path.name for path in (tmp_path / "tenant" / "kb" / "versions").iterdir()
+    )
+    assert len(versions) == 3
+
+
+def test_check_detects_fingerprint_mismatch(tmp_path: Path) -> None:
+    manager = BM25IndexManager(tmp_path, retention=2)
+    temp, manifest = _tiny_version(tmp_path, "tenant", "kb", "20261112T083000000000Z-111111111111")
+    manager.publish(tenant_id="tenant", knowledge_base_id="kb", temp_dir=temp, manifest=manifest)
+
+    try:
+        manager.check(
+            tenant_id="tenant",
+            knowledge_base_id="kb",
+            expected_fingerprint="0" * 64,
+        )
+    except BM25IndexStale as exc:
+        assert "rebuild" in str(exc).lower()
+    else:
+        raise AssertionError("expected BM25IndexStale")
+```
+
+- [x] **Step 2: Run the tests and verify they fail.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_index.py -q
+```
+
+- [x] **Step 3: Implement `BM25IndexStore` and `BM25IndexManager`.**
+
+Append to `backend/app/retrieval/bm25_index.py`:
+
+```python
+def _fsync_file(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_dir(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+class BM25IndexStore:
+    def __init__(self, index_root: Path, *, retention: int = 2) -> None:
+        if retention < 1:
+            raise ValueError("retention must be at least 1")
+        self.index_root = index_root
+        self.retention = retention
+
+    def tenant_root(self, tenant_id: str, knowledge_base_id: str) -> Path:
+        return self.index_root / tenant_id / knowledge_base_id
+
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+        root = self.tenant_root(tenant_id, knowledge_base_id)
+        command = rebuild_command(tenant_id, knowledge_base_id)
+        pointer_path = root / BM25_POINTER_FILE
+        try:
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise BM25IndexUnavailable(
+                f"BM25 index not found for tenant {tenant_id} and KB {knowledge_base_id}; "
+                f"rebuild with: {command}"
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise BM25IndexStale(
+                f"invalid BM25 current pointer for tenant {tenant_id} and KB "
+                f"{knowledge_base_id}; rebuild with: {command}"
+            ) from exc
+
+        try:
+            version_name = str(pointer["version"])
+            pointer_hash = str(pointer["manifest_sha256"])
+        except (KeyError, TypeError) as exc:
+            raise BM25IndexStale(
+                f"invalid BM25 current pointer for tenant {tenant_id} and KB "
+                f"{knowledge_base_id}; rebuild with: {command}"
+            ) from exc
+
+        version_dir = root / "versions" / version_name
+        manifest_path = version_dir / BM25_MANIFEST_FILE
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+        except OSError as exc:
+            raise BM25IndexUnavailable(
+                f"BM25 index version {version_name} is missing for tenant {tenant_id} "
+                f"and KB {knowledge_base_id}; rebuild with: {command}"
+            ) from exc
+        if hashlib.sha256(manifest_bytes).hexdigest() != pointer_hash:
+            raise BM25IndexStale(
+                f"BM25 manifest hash mismatch for version {version_name}; rebuild with: {command}"
+            )
+
+        try:
+            manifest = BM25Manifest.from_dict(json.loads(manifest_bytes))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise BM25IndexStale(
+                f"invalid BM25 manifest for version {version_name}; rebuild with: {command}"
+            ) from exc
+        if manifest.version != version_name:
+            raise BM25IndexStale(
+                f"BM25 version mismatch for {version_name}; rebuild with: {command}"
+            )
+        if manifest.tenant_id != tenant_id or manifest.knowledge_base_id != knowledge_base_id:
+            raise BM25IndexStale(
+                f"BM25 manifest belongs to a different tenant/KB; rebuild with: {command}"
+            )
+        if manifest.schema_version != BM25_SCHEMA_VERSION:
+            raise BM25IndexStale(
+                f"BM25 schema {manifest.schema_version} is not supported; rebuild with: {command}"
+            )
+
+        catalog_path = version_dir / BM25_CATALOG_FILE
+        try:
+            catalog = tuple(read_catalog(catalog_path))
+        except OSError as exc:
+            raise BM25IndexUnavailable(
+                f"BM25 catalog is missing for version {version_name}; rebuild with: {command}"
+            ) from exc
+        if sha256_file(catalog_path) != manifest.catalog_sha256:
+            raise BM25IndexStale(
+                f"BM25 catalog hash mismatch for version {version_name}; rebuild with: {command}"
+            )
+        if len(catalog) != manifest.row_count:
+            raise BM25IndexStale(
+                f"BM25 catalog has {len(catalog)} rows but manifest expects "
+                f"{manifest.row_count}; rebuild with: {command}"
+            )
+        if [entry.row_index for entry in catalog] != list(range(len(catalog))):
+            raise BM25IndexStale(
+                f"BM25 catalog row indexes are invalid for version {version_name}; "
+                f"rebuild with: {command}"
+            )
+
+        try:
+            index = bm25s.BM25.load(
+                version_dir / BM25_INDEX_DIR,
+                load_corpus=False,
+                show_progress=False,
+            )
+        except (OSError, ValueError) as exc:
+            raise BM25IndexUnavailable(
+                f"BM25 index files are unreadable for version {version_name}; "
+                f"rebuild with: {command}"
+            ) from exc
+
+        return BM25IndexSnapshot(
+            manifest=manifest,
+            catalog=catalog,
+            index=index,
+            stemmer=Stemmer.Stemmer(BM25_STEMMER),
+        )
+
+    def check(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        expected_fingerprint: str,
+    ) -> BM25Manifest:
+        snapshot = self.load(tenant_id=tenant_id, knowledge_base_id=knowledge_base_id)
+        if snapshot.manifest.corpus_fingerprint != expected_fingerprint:
+            raise BM25IndexStale(
+                f"BM25 index is stale for tenant {tenant_id} and KB {knowledge_base_id}; "
+                f"rebuild with: {rebuild_command(tenant_id, knowledge_base_id)}"
+            )
+        return snapshot.manifest
+
+    def publish(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        temp_dir: Path,
+        manifest: BM25Manifest,
+    ) -> BM25Manifest:
+        root = self.tenant_root(tenant_id, knowledge_base_id)
+        versions_dir = root / "versions"
+        versions_dir.mkdir(parents=True, exist_ok=True)
+        target = versions_dir / manifest.version
+        if target.exists():
+            raise BM25IndexError(
+                f"BM25 version {manifest.version} already exists for tenant {tenant_id} "
+                f"and KB {knowledge_base_id}"
+            )
+
+        temp_dir.replace(target)
+        _fsync_dir(versions_dir)
+        pointer = {
+            "version": manifest.version,
+            "manifest_sha256": sha256_file(target / BM25_MANIFEST_FILE),
+        }
+        pointer_tmp = root / f".current-{uuid.uuid4().hex}.tmp"
+        pointer_tmp.write_text(
+            json.dumps(pointer, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _fsync_file(pointer_tmp)
+        os.replace(pointer_tmp, root / BM25_POINTER_FILE)
+        _fsync_dir(root)
+        self._cleanup(root, active=manifest.version)
+        return manifest
+
+    def _cleanup(self, root: Path, *, active: str) -> None:
+        versions_dir = root / "versions"
+        versions = sorted(
+            path for path in versions_dir.iterdir() if path.is_dir() and not path.name.startswith(".")
+        )
+        keep = {path.name for path in versions[-(self.retention + 1) :]}
+        keep.add(active)
+        for path in versions:
+            if path.name not in keep:
+                shutil.rmtree(path, ignore_errors=True)
+
+
+class BM25IndexManager:
+    def __init__(self, index_root: Path | str, *, retention: int = 2) -> None:
+        self._store = BM25IndexStore(Path(index_root), retention=retention)
+        self._cache: dict[tuple[str, str], BM25IndexSnapshot] = {}
+
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+        key = (tenant_id, knowledge_base_id)
+        if key not in self._cache:
+            self._cache[key] = self._store.load(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+        return self._cache[key]
+
+    def reload(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+        self._cache.pop((tenant_id, knowledge_base_id), None)
+        return self.load(tenant_id=tenant_id, knowledge_base_id=knowledge_base_id)
+
+    def check(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        expected_fingerprint: str,
+    ) -> BM25Manifest:
+        return self._store.check(
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            expected_fingerprint=expected_fingerprint,
+        )
+
+    def publish(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+        temp_dir: Path,
+        manifest: BM25Manifest,
+    ) -> BM25Manifest:
+        result = self._store.publish(
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+            temp_dir=temp_dir,
+            manifest=manifest,
+        )
+        self._cache.clear()
+        return result
+```
+
+- [x] **Step 4: Run tests and Ruff.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_index.py -q
+uv run ruff check backend/app/retrieval/bm25_index.py \
+  backend/tests/unit/test_bm25_index.py
+```
+
+- [x] **Step 5: Commit.**
+
+```bash
+git add backend/app/retrieval/bm25_index.py backend/tests/unit/test_bm25_index.py
+git commit -m "feat: add atomic BM25 index store"
+```
+
+---
+
+## Task 4: Implement Corpus Loading and Build/Publish
+
+**Files:**
+
+- Create: `backend/app/retrieval/bm25_builder.py`
+- Create: `backend/tests/unit/test_bm25_builder.py`
+
+- [x] **Step 1: Write failing builder tests.**
+
+```python
+from pathlib import Path
+
+from app.retrieval.bm25_builder import BM25BuildChunk, BM25Corpus, build_bm25_index
+from app.retrieval.bm25_index import BM25IndexManager
+
+
+def _corpus() -> BM25Corpus:
+    return BM25Corpus(
+        chunks=(
+            BM25BuildChunk(
+                chunk_id="chunk-1",
+                doc_id="doc-1",
+                source_type="pdf",
+                title="Alpha",
+                chunk_index=0,
+                content="needle one",
+                content_hash="hash-1",
+            ),
+            BM25BuildChunk(
+                chunk_id="chunk-2",
+                doc_id="doc-2",
+                source_type="html",
+                title="Beta",
+                chunk_index=0,
+                content="needle two",
+                content_hash="hash-2",
+            ),
+        ),
+        document_count=2,
+    )
+
+
+def test_build_publishes_loadable_snapshot(tmp_path: Path) -> None:
+    manifest = build_bm25_index(
+        corpus=_corpus(),
+        index_root=tmp_path,
+        tenant_id="tenant",
+        knowledge_base_id="kb",
+    )
+
+    snapshot = BM25IndexManager(tmp_path).load(tenant_id="tenant", knowledge_base_id="kb")
+
+    assert snapshot.manifest == manifest
+    assert snapshot.manifest.document_count == 2
+    assert snapshot.manifest.row_count == 2
+    assert [entry.chunk_id for entry in snapshot.catalog] == ["chunk-1", "chunk-2"]
+    assert snapshot.search(snapshot.tokenize("needle"), 2)[0] == [0, 1]
+
+
+def test_empty_corpus_is_rejected(tmp_path: Path) -> None:
+    try:
+        build_bm25_index(
+            corpus=BM25Corpus(chunks=(), document_count=0),
+            index_root=tmp_path,
+            tenant_id="tenant",
+            knowledge_base_id="kb",
+        )
+    except ValueError as exc:
+        assert "no chunks" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+```
+
+- [x] **Step 2: Run the tests and verify they fail.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_builder.py -q
+```
+
+- [x] **Step 3: Implement `bm25_builder.py`.**
+
+```python
+"""Build BM25 indexes from PostgreSQL chunks."""
+
+from __future__ import annotations
+
+import fcntl
+import shutil
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from importlib.metadata import version
+from pathlib import Path
+
+import bm25s
+import Stemmer
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import ChunkRecord, Document
+from app.retrieval.bm25_index import (
+    BM25_B,
+    BM25_CATALOG_FILE,
+    BM25_INDEX_DIR,
+    BM25_K1,
+    BM25_MANIFEST_FILE,
+    BM25_METHOD,
+    BM25_SCHEMA_VERSION,
+    BM25_STEMMER,
+    BM25_STOPWORDS,
+    BM25CatalogEntry,
+    BM25IndexManager,
+    BM25Manifest,
+    corpus_fingerprint,
+    sha256_file,
+    tokenize_bm25,
+    write_catalog,
+    write_manifest,
+)
+
+
+@dataclass(frozen=True)
+class BM25BuildChunk:
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class BM25Corpus:
+    chunks: tuple[BM25BuildChunk, ...]
+    document_count: int
+
+    @property
+    def row_count(self) -> int:
+        return len(self.chunks)
+
+
+async def load_bm25_corpus(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+) -> BM25Corpus:
+    document_count = await session.scalar(
+        select(func.count())
+        .select_from(Document)
+        .where(
+            Document.tenant_id == tenant_id,
+            Document.knowledge_base_id == knowledge_base_id,
+        )
+    )
+    result = await session.execute(
+        select(ChunkRecord)
+        .where(
+            ChunkRecord.tenant_id == tenant_id,
+            ChunkRecord.knowledge_base_id == knowledge_base_id,
+        )
+        .order_by(ChunkRecord.chunk_id)
+    )
+    rows = result.scalars().all()
+    chunks = tuple(
+        BM25BuildChunk(
+            chunk_id=row.chunk_id,
+            doc_id=row.doc_id,
+            source_type=row.source_type,
+            title=row.title,
+            chunk_index=row.chunk_index,
+            content=row.content,
+            content_hash=row.content_hash,
+        )
+        for row in rows
+    )
+    return BM25Corpus(chunks=chunks, document_count=int(document_count or 0))
+
+
+@contextmanager
+def build_lock(root: Path) -> Iterator[None]:
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".build.lock"
+    with lock_path.open("w", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"another BM25 build is running for {root}") from exc
+        yield
+
+
+def build_bm25_index(
+    *,
+    corpus: BM25Corpus,
+    index_root: Path,
+    tenant_id: str,
+    knowledge_base_id: str,
+    retention: int = 2,
+) -> BM25Manifest:
+    chunks = tuple(sorted(corpus.chunks, key=lambda chunk: chunk.chunk_id))
+    if not chunks:
+        raise ValueError(
+            f"no chunks found for tenant {tenant_id} and KB {knowledge_base_id}"
+        )
+
+    fingerprint = corpus_fingerprint(
+        (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
+    )
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    index_version = f"{timestamp}-{fingerprint[:12]}"
+    root = Path(index_root) / tenant_id / knowledge_base_id
+    manager = BM25IndexManager(index_root, retention=retention)
+
+    with build_lock(root):
+        temp_dir = root / f".building-{uuid.uuid4().hex}"
+        temp_dir.mkdir(parents=True)
+        try:
+            stemmer = Stemmer.Stemmer(BM25_STEMMER)
+            texts = [f"{chunk.title}\n{chunk.content}" for chunk in chunks]
+            tokens = tokenize_bm25(texts, stemmer)
+            index = bm25s.BM25(k1=BM25_K1, b=BM25_B, method=BM25_METHOD)
+            index.index(tokens, show_progress=False)
+            index.save(temp_dir / BM25_INDEX_DIR, show_progress=False)
+
+            entries = [
+                BM25CatalogEntry(
+                    row_index=row_index,
+                    chunk_id=chunk.chunk_id,
+                    doc_id=chunk.doc_id,
+                    source_type=chunk.source_type,
+                    title=chunk.title,
+                    chunk_index=chunk.chunk_index,
+                    content_hash=chunk.content_hash,
+                )
+                for row_index, chunk in enumerate(chunks)
+            ]
+            catalog_path = temp_dir / BM25_CATALOG_FILE
+            write_catalog(catalog_path, entries)
+            manifest = BM25Manifest(
+                schema_version=BM25_SCHEMA_VERSION,
+                version=index_version,
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                created_at=datetime.now(UTC).isoformat(),
+                document_count=corpus.document_count,
+                row_count=len(chunks),
+                corpus_fingerprint=fingerprint,
+                catalog_sha256=sha256_file(catalog_path),
+                k1=BM25_K1,
+                b=BM25_B,
+                method=BM25_METHOD,
+                stopwords=BM25_STOPWORDS,
+                stemmer=BM25_STEMMER,
+                bm25s_version=version("bm25s"),
+                pystemmer_version=version("PyStemmer"),
+            )
+            write_manifest(temp_dir / BM25_MANIFEST_FILE, manifest)
+
+            loaded = bm25s.BM25.load(
+                temp_dir / BM25_INDEX_DIR,
+                load_corpus=False,
+                show_progress=False,
+            )
+            probe_tokens = next((row for row in tokens if row), [])
+            if len(entries) != len(chunks) or not probe_tokens:
+                raise RuntimeError("built BM25 index failed validation")
+            probe_indices, _ = loaded.retrieve(
+                [probe_tokens],
+                k=1,
+                show_progress=False,
+            )
+            if len(probe_indices[0]) != 1:
+                raise RuntimeError("built BM25 index failed validation")
+
+            return manager.publish(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                temp_dir=temp_dir,
+                manifest=manifest,
+            )
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+```
+
+- [x] **Step 4: Run tests and Ruff.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_builder.py -q
+uv run ruff check backend/app/retrieval/bm25_builder.py \
+  backend/tests/unit/test_bm25_builder.py
+```
+
+- [x] **Step 5: Commit.**
+
+```bash
+git add backend/app/retrieval/bm25_builder.py backend/tests/unit/test_bm25_builder.py
+git commit -m "feat: build and publish BM25 indexes"
+```
+
+---
+
+## Task 5: Add Chunk Lookup and `BM25Retriever`
+
+**Files:**
+
+- Modify: `backend/app/db/repositories.py`
+- Modify: `backend/tests/integration/test_database.py`
+- Create: `backend/app/retrieval/bm25.py`
+- Create: `backend/tests/unit/test_bm25_retriever.py`
+
+- [x] **Step 1: Write the failing repository integration test.**
+
+```python
+@pytest.mark.integration
+async def test_get_chunks_by_ids_enforces_tenant_and_source(session: AsyncSession) -> None:
+    chunk = (await session.execute(select(ChunkRecord).limit(1))).scalar_one()
+
+    rows = await get_chunks_by_ids(
+        session,
+        [chunk.chunk_id],
+        tenant_id=chunk.tenant_id,
+        knowledge_base_id=chunk.knowledge_base_id,
+        source_types=[chunk.source_type],
+    )
+    assert [row.chunk_id for row in rows] == [chunk.chunk_id]
+
+    wrong_tenant = await get_chunks_by_ids(
+        session,
+        [chunk.chunk_id],
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=chunk.knowledge_base_id,
+    )
+    assert wrong_tenant == []
+```
+
+- [x] **Step 2: Implement `get_chunks_by_ids`.**
+
+Append to `backend/app/db/repositories.py`:
+
+```python
+async def get_chunks_by_ids(
+    session: AsyncSession,
+    chunk_ids: Sequence[str],
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+    source_types: Sequence[str] | None = None,
+) -> list[ChunkRecord]:
+    if not chunk_ids:
+        return []
+
+    statement = select(ChunkRecord).where(
+        ChunkRecord.tenant_id == tenant_id,
+        ChunkRecord.knowledge_base_id == knowledge_base_id,
+        ChunkRecord.chunk_id.in_(list(chunk_ids)),
+    )
+    if source_types:
+        statement = statement.where(ChunkRecord.source_type.in_(list(source_types)))
+    result = await session.execute(statement)
+    return list(result.scalars())
+```
+
+- [x] **Step 3: Write failing retriever tests.**
+
+```python
+import uuid
+from collections.abc import Sequence
+from pathlib import Path
+
+import pytest
+
+from app.retrieval.bm25 import BM25Retriever
+from app.retrieval.bm25_index import (
+    BM25CatalogEntry,
+    BM25IndexSnapshot,
+    BM25IndexStale,
+    BM25Manifest,
+)
+
+
+class FakeSnapshot:
+    def __init__(self) -> None:
+        self.manifest = BM25Manifest(
+            schema_version=1,
+            version="v1",
+            tenant_id="tenant",
+            knowledge_base_id="kb",
+            created_at="2026-11-12T08:30:00+00:00",
+            document_count=20,
+            row_count=20,
+            corpus_fingerprint="f" * 64,
+            catalog_sha256="c" * 64,
+            k1=1.5,
+            b=0.75,
+            method="lucene",
+            stopwords="english",
+            stemmer="english",
+            bm25s_version="0.3.16",
+            pystemmer_version="3.1.0",
+        )
+        self.catalog = tuple(
+            BM25CatalogEntry(
+                row_index=index,
+                chunk_id=f"chunk-{index}",
+                doc_id=f"doc-{index}",
+                source_type="pdf" if index == 19 else "html",
+                title=f"Title {index}",
+                chunk_index=index,
+                content_hash=f"hash-{index}",
+            )
+            for index in range(20)
+        )
+
+    @property
+    def row_count(self) -> int:
+        return len(self.catalog)
+
+    def tokenize(self, query: str) -> list[str]:
+        return ["needle"]
+
+    def search(self, tokens: Sequence[str], k: int) -> tuple[list[int], list[float]]:
+        indices = list(range(min(k, self.row_count)))
+        return indices, [1.0 for _ in indices]
+
+
+class FakeManager:
+    def __init__(self, snapshot: BM25IndexSnapshot) -> None:
+        self.snapshot = snapshot
+
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+        return self.snapshot
+
+
+class FakeChunk:
+    def __init__(self, chunk_id: str, source_type: str) -> None:
+        self.chunk_id = chunk_id
+        self.doc_id = f"doc-{chunk_id}"
+        self.source_type = source_type
+        self.title = f"Title {chunk_id}"
+        self.chunk_index = 0
+        self.content = "needle"
+        self.doc_metadata = {}
+
+
+class FakeSession:
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _session_factory() -> FakeSession:
+    return FakeSession()
+
+
+async def test_retriever_overfetches_for_source_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = FakeSnapshot()
+
+    async def fake_get_chunks_by_ids(
+        session: object,
+        chunk_ids: Sequence[str],
+        **kwargs: object,
+    ) -> list[FakeChunk]:
+        del session, kwargs
+        return [
+            FakeChunk(chunk_id, "pdf" if chunk_id == "chunk-19" else "html")
+            for chunk_id in chunk_ids
+        ]
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fake_get_chunks_by_ids)
+
+    retriever = BM25Retriever(
+        FakeManager(snapshot),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+    results = await retriever.retrieve("needle", top_k=2, source_types=["pdf"])
+
+    assert [result.chunk_id for result in results] == ["chunk-19"]
+
+
+async def test_retriever_rejects_missing_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = FakeSnapshot()
+
+    async def fake_get_chunks_by_ids(*args: object, **kwargs: object) -> list[FakeChunk]:
+        return []
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fake_get_chunks_by_ids)
+
+    retriever = BM25Retriever(
+        FakeManager(snapshot),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(BM25IndexStale, match="rebuild"):
+        await retriever.retrieve("needle", top_k=2)
+
+
+async def test_retriever_returns_empty_for_blank_query() -> None:
+    retriever = BM25Retriever(
+        FakeManager(FakeSnapshot()),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    assert await retriever.retrieve("   ", top_k=2) == []
+```
+
+- [x] **Step 4: Implement `BM25Retriever`.**
+
+Create `backend/app/retrieval/bm25.py`:
+
+```python
+"""In-process BM25 retrieval over a versioned index."""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from collections.abc import Sequence
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.db.repositories import get_chunks_by_ids
+from app.retrieval.bm25_index import (
+    BM25CatalogEntry,
+    BM25IndexManager,
+    BM25IndexSnapshot,
+    BM25IndexStale,
+    rebuild_command,
+)
+from app.retrieval.types import RetrievedChunk
+
+
+class BM25Retriever:
+    def __init__(
+        self,
+        manager: BM25IndexManager,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        tenant_id: uuid.UUID,
+        knowledge_base_id: uuid.UUID,
+    ) -> None:
+        self.manager = manager
+        self.session_factory = session_factory
+        self.tenant_id = tenant_id
+        self.knowledge_base_id = knowledge_base_id
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_types: Sequence[str] | None = None,
+    ) -> list[RetrievedChunk]:
+        if top_k <= 0:
+            raise ValueError("top_k must be positive")
+        if not query.strip():
+            return []
+
+        tenant_id = str(self.tenant_id)
+        knowledge_base_id = str(self.knowledge_base_id)
+        snapshot: BM25IndexSnapshot = await asyncio.to_thread(
+            self.manager.load,
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        tokens = await asyncio.to_thread(snapshot.tokenize, query)
+        if not tokens:
+            return []
+
+        allowed = set(source_types) if source_types else None
+        candidate_k = top_k
+        if allowed is not None:
+            candidate_k = min(max(top_k * 4, top_k), snapshot.row_count)
+
+        selected: list[tuple[BM25CatalogEntry, float]] = []
+        while True:
+            indices, scores = await asyncio.to_thread(snapshot.search, tokens, candidate_k)
+            selected = [
+                (snapshot.catalog[index], score)
+                for index, score in zip(indices, scores, strict=True)
+                if allowed is None or snapshot.catalog[index].source_type in allowed
+            ]
+            if len(selected) >= top_k or candidate_k >= snapshot.row_count:
+                break
+            next_k = min(snapshot.row_count, candidate_k * 2)
+            if next_k == candidate_k:
+                break
+            candidate_k = next_k
+
+        selected = selected[:top_k]
+        if not selected:
+            return []
+
+        chunk_ids = [entry.chunk_id for entry, _ in selected]
+        async with self.session_factory() as session:
+            rows = await get_chunks_by_ids(
+                session,
+                chunk_ids,
+                tenant_id=self.tenant_id,
+                knowledge_base_id=self.knowledge_base_id,
+                source_types=source_types,
+            )
+
+        by_id = {row.chunk_id: row for row in rows}
+        missing = [chunk_id for chunk_id in chunk_ids if chunk_id not in by_id]
+        if missing:
+            raise BM25IndexStale(
+                f"BM25 index references {len(missing)} missing chunk(s) for tenant "
+                f"{tenant_id} and KB {knowledge_base_id}; rebuild with: "
+                f"{rebuild_command(tenant_id, knowledge_base_id)}"
+            )
+
+        return [
+            RetrievedChunk(
+                chunk_id=row.chunk_id,
+                doc_id=row.doc_id,
+                source_type=row.source_type,
+                title=row.title,
+                chunk_index=row.chunk_index,
+                content=row.content,
+                score=score,
+                metadata=row.doc_metadata,
+            )
+            for entry, score in selected
+            for row in [by_id[entry.chunk_id]]
+        ]
+```
+
+Import `BM25CatalogEntry` from `app.retrieval.bm25_index` in the retriever module for the
+type annotation. The `selected` loop must not index the catalog before checking bounds;
+the snapshot only returns valid row indices.
+
+- [x] **Step 5: Run focused tests and Ruff.**
+
+```bash
+uv run pytest backend/tests/unit/test_bm25_retriever.py \
+  backend/tests/integration/test_database.py -q
+uv run ruff check backend/app/retrieval/bm25.py \
+  backend/app/db/repositories.py backend/tests/unit/test_bm25_retriever.py
+```
+
+- [x] **Step 6: Commit.**
+
+```bash
+git add backend/app/retrieval/bm25.py backend/app/db/repositories.py \
+  backend/tests/unit/test_bm25_retriever.py \
+  backend/tests/integration/test_database.py
+git commit -m "feat: add BM25 retriever with adaptive overfetch"
+```
+
+---
+
+## Task 6: Add Rebuild and Check CLI
+
+**Files:**
+
+- Create: `scripts/build_bm25_index.py`
+- Create: `backend/tests/integration/test_bm25_production.py`
+
+- [x] **Step 1: Write the failing CLI integration test.**
+
+```python
+import subprocess
+import sys
+import uuid
+
+import pytest
+
+
+@pytest.mark.integration
+def test_build_cli_check_detects_missing_index(tmp_path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_bm25_index.py",
+            "--tenant-id", str(uuid.uuid4()),
+            "--knowledge-base-id", str(uuid.uuid4()),
+            "--index-root", str(tmp_path),
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "rebuild" in result.stderr.lower()
+```
+
+- [x] **Step 2: Implement `scripts/build_bm25_index.py`.**
+
+```python
+#!/usr/bin/env python3
+"""Build or check a production BM25 index."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import sys
+import uuid
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+
+from app.db.session import build_engine, build_session_factory  # noqa: E402
+from app.retrieval.bm25_builder import build_bm25_index, load_bm25_corpus  # noqa: E402
+from app.retrieval.bm25_index import (  # noqa: E402
+    BM25IndexError,
+    BM25IndexManager,
+    corpus_fingerprint,
+)
+from app.settings import Settings, get_settings  # noqa: E402
+
+
+def build_parser(settings: Settings) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
+    parser.add_argument(
+        "--knowledge-base-id",
+        type=uuid.UUID,
+        default=settings.default_knowledge_base_id,
+    )
+    parser.add_argument("--index-root", type=Path, default=settings.bm25_index_root)
+    parser.add_argument("--retention", type=int, default=settings.bm25_retention)
+    parser.add_argument("--check", action="store_true")
+    return parser
+
+
+async def run(args: argparse.Namespace, settings: Settings) -> None:
+    if args.retention < 1:
+        raise ValueError("retention must be at least 1")
+
+    engine = build_engine(settings)
+    session_factory = build_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            corpus = await load_bm25_corpus(
+                session,
+                tenant_id=args.tenant_id,
+                knowledge_base_id=args.knowledge_base_id,
+            )
+        expected = corpus_fingerprint(
+            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in corpus.chunks
+        )
+        manager = BM25IndexManager(args.index_root, retention=args.retention)
+        if args.check:
+            manifest = manager.check(
+                tenant_id=str(args.tenant_id),
+                knowledge_base_id=str(args.knowledge_base_id),
+                expected_fingerprint=expected,
+            )
+            print(
+                f"BM25 index is current: version={manifest.version} "
+                f"rows={manifest.row_count}"
+            )
+            return
+
+        manifest = await asyncio.to_thread(
+            build_bm25_index,
+            corpus=corpus,
+            index_root=args.index_root,
+            tenant_id=str(args.tenant_id),
+            knowledge_base_id=str(args.knowledge_base_id),
+            retention=args.retention,
+        )
+        print(
+            f"Published BM25 index: version={manifest.version} "
+            f"rows={manifest.row_count} documents={manifest.document_count}"
+        )
+    finally:
+        await engine.dispose()
+
+
+def main(argv: list[str] | None = None) -> int:
+    settings = get_settings()
+    args = build_parser(settings).parse_args(argv)
+    try:
+        asyncio.run(run(args, settings))
+    except (BM25IndexError, OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [x] **Step 3: Run the CLI tests and a real dry check.**
+
+```bash
+uv run pytest backend/tests/integration/test_bm25_production.py -q
+uv run python scripts/build_bm25_index.py --help
+```
+
+Expected: help succeeds; missing-index check returns a non-zero exit with a rebuild
+command.
+
+- [x] **Step 4: Commit.**
+
+```bash
+git add scripts/build_bm25_index.py backend/tests/integration/test_bm25_production.py
+git commit -m "feat: add BM25 rebuild CLI"
+```
+
+---
+
+## Task 7: Add Query CLI
+
+**Files:**
+
+- Create: `scripts/bm25_search.py`
+
+- [x] **Step 1: Implement the query CLI.**
+
+```python
+#!/usr/bin/env python3
+"""Query a production BM25 index."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+import uuid
+from dataclasses import asdict
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+
+from app.db.session import build_engine, build_session_factory  # noqa: E402
+from app.retrieval.bm25 import BM25Retriever  # noqa: E402
+from app.retrieval.bm25_index import BM25IndexError, BM25IndexManager  # noqa: E402
+from app.settings import Settings, get_settings  # noqa: E402
+
+
+def build_parser(settings: Settings) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("query")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--source-type", action="append", dest="source_types")
+    parser.add_argument("--index-root", type=Path, default=settings.bm25_index_root)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
+    parser.add_argument(
+        "--knowledge-base-id",
+        type=uuid.UUID,
+        default=settings.default_knowledge_base_id,
+    )
+    return parser
+
+
+async def run(args: argparse.Namespace, settings: Settings) -> list[dict[str, object]]:
+    if args.top_k <= 0:
+        raise ValueError("top-k must be positive")
+
+    engine = build_engine(settings)
+    try:
+        retriever = BM25Retriever(
+            BM25IndexManager(args.index_root),
+            build_session_factory(engine),
+            tenant_id=args.tenant_id,
+            knowledge_base_id=args.knowledge_base_id,
+        )
+        results = await retriever.retrieve(
+            args.query,
+            top_k=args.top_k,
+            source_types=args.source_types,
+        )
+    finally:
+        await engine.dispose()
+
+    rows = [asdict(result) for result in results]
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+    else:
+        for rank, row in enumerate(rows, start=1):
+            print(f"{rank}. {row['score']:.4f} {row['chunk_id']} {row['title']}")
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    settings = get_settings()
+    args = build_parser(settings).parse_args(argv)
+    try:
+        asyncio.run(run(args, settings))
+    except (BM25IndexError, OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+- [x] **Step 2: Verify help and missing-index behavior.**
+
+```bash
+uv run python scripts/bm25_search.py --help
+uv run python scripts/bm25_search.py "test query" --index-root /tmp/empty-bm25
+```
+
+Expected: help succeeds; the second command fails with a rebuild command.
+
+- [x] **Step 3: Commit.**
+
+```bash
+git add scripts/bm25_search.py
+git commit -m "feat: add BM25 query CLI"
+```
+
+---
+
+## Task 8: Add BM25 Evaluation Mode and Latency
+
+**Files:**
+
+- Modify: `backend/app/evaluation/dev.py`
+- Modify: `backend/tests/unit/test_dev_evaluation.py`
+- Modify: `scripts/eval_retrieval_dev.py`
+
+- [x] **Step 1: Write the failing latency helper test.**
+
+```python
+import pytest
+
+from app.evaluation.dev import latency_summary
+
+
+def test_latency_summary_reports_percentiles() -> None:
+    summary = latency_summary([1.0, 2.0, 3.0, 4.0, 5.0])
+
+    assert summary["count"] == 5
+    assert summary["p50_ms"] == 3.0
+    assert summary["p95_ms"] == pytest.approx(4.8)
+    assert summary["max_ms"] == 5.0
+```
+
+- [x] **Step 2: Implement `latency_summary`.**
+
+Append to `backend/app/evaluation/dev.py`:
+
+```python
+def latency_summary(durations_ms: Sequence[float]) -> dict[str, float | int]:
+    if not durations_ms:
+        raise ValueError("durations_ms must not be empty")
+    ordered = sorted(durations_ms)
+
+    def percentile(fraction: float) -> float:
+        position = (len(ordered) - 1) * fraction
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    return {
+        "count": len(ordered),
+        "p50_ms": percentile(0.50),
+        "p95_ms": percentile(0.95),
+        "max_ms": ordered[-1],
+    }
+```
+
+- [x] **Step 3: Wire `bm25` into the evaluation script.**
+
+In `scripts/eval_retrieval_dev.py`:
+
+- Update `MODES = ("dense", "lexical", "hybrid", "bm25")`.
+- Import `BM25Retriever`, `BM25IndexManager`, and `latency_summary`.
+- Change provider construction to `if args.mode in {"dense", "hybrid", "all"}:`.
+- Add `--latency-top-k` with default `50`.
+- Build `bm25 = BM25Retriever(BM25IndexManager(settings.bm25_index_root), session_factory, ...)`.
+- Register `retriever_by_mode["bm25"] = bm25`.
+- After quality evaluation for `bm25`, measure `args.latency_top_k` over the same questions:
+
+```python
+        if mode == "bm25":
+            durations_ms: list[float] = []
+            for question in questions:
+                start = time.perf_counter()
+                await bm25.retrieve(question.question, top_k=args.latency_top_k)
+                durations_ms.append((time.perf_counter() - start) * 1000.0)
+            reports[mode]["latency_top50"] = latency_summary(durations_ms)
+```
+
+Use `time.perf_counter` and import `time`. The output report must include `latency_top50`
+only for BM25; do not change dense/lexical/hybrid quality calculations.
+
+- [x] **Step 4: Run tests and help.**
+
+```bash
+uv run pytest backend/tests/unit/test_dev_evaluation.py -q
+uv run python scripts/eval_retrieval_dev.py --help
+```
+
+- [x] **Step 5: Commit.**
+
+```bash
+git add backend/app/evaluation/dev.py backend/tests/unit/test_dev_evaluation.py \
+  scripts/eval_retrieval_dev.py
+git commit -m "feat: evaluate production BM25 retrieval"
+```
+
+---
+
+## Task 9: Build the Real Index and Run the Development Evaluation
+
+**Files:**
+
+- Modify: `plan.md` (record results)
+- Create: `docs/architecture/bm25-retrieval.md`
+- Create: `docs/design-decisions/0004-bm25-production-backend.md`
+- Modify: `README.md`
+
+- [x] **Step 1: Build the default production index.**
+
+```bash
+uv run python scripts/build_bm25_index.py \
+  --tenant-id 00000000-0000-0000-0000-000000000001 \
+  --knowledge-base-id 00000000-0000-0000-0000-000000000002
+```
+
+Expected: publishes a version under `data/indexes/bm25/...` and prints document/row counts.
+The repository counts must be `34378` documents and `136383` chunks.
+
+- [x] **Step 2: Check the index against PostgreSQL.**
+
+```bash
+uv run python scripts/build_bm25_index.py \
+  --tenant-id 00000000-0000-0000-0000-000000000001 \
+  --knowledge-base-id 00000000-0000-0000-0000-000000000002 \
+  --check
+```
+
+Expected: `BM25 index is current`.
+
+- [x] **Step 3: Run the development evaluation.**
+
+```bash
+uv run python scripts/eval_retrieval_dev.py \
+  --mode bm25 \
+  --top-k 20 \
+  --output data/processed/retrieval_dev_metrics_block4.json
+```
+
+Expected targets relative to Block 3.5:
+
+| Metric | Target |
+|---|---|
+| recall@20 | approximately 0.8494 |
+| recall@10 | approximately 0.7776 |
+| recall@5 | approximately 0.7310 |
+| MRR | approximately 0.6771 |
+| zero-result questions | 0 |
+| top-50 p95 | `< 200 ms` |
+
+If the metrics differ materially, stop and investigate before documenting. Do not tune
+on the holdout.
+
+Measured on 2026-11-14 for the default tenant/KB (`20261114T114342596160Z-9b59d71b6d36`,
+34,378 documents, 136,383 chunks, about 181 MB on disk). `--check` reported
+`BM25 index is current`.
+
+| Metric | Measured | Target |
+|---|---:|---:|
+| recall@1 | 0.5138 | — |
+| recall@5 | 0.7310 | approximately 0.7310 |
+| recall@10 | 0.7776 | approximately 0.7776 |
+| recall@20 | 0.8494 | approximately 0.8494 |
+| MRR | 0.6771 | approximately 0.6771 |
+| zero-result questions | 0 | 0 |
+| top-50 p50 latency | 10.4 ms | — |
+| top-50 p95 latency | 11.3 ms | `< 200 ms` |
+| top-50 max latency | 12.1 ms | — |
+
+The run reproduces the Block 3.5 benchmark and clears every target. No tuning was needed.
+Metrics are in `data/processed/retrieval_dev_metrics_block4.json` (gitignored).
+
+- [x] **Step 4: Write the architecture doc and ADR.**
+
+`docs/architecture/bm25-retrieval.md` must cover:
+
+- Why BM25-only replaced the hybrid continuation.
+- Corpus construction, tokenizer, parameters, and fingerprint.
+- Version directory layout, manifest, catalog, pointer, retention, and lock.
+- Atomic publish and failure behavior.
+- Runtime flow, adaptive overfetch, source filters, DB content fetch, and stale errors.
+- Operational commands for build, check, query, and evaluation.
+- Caching/reload semantics and the batch-rebuild limitation.
+- Measured results and latency from Step 3.
+
+`docs/design-decisions/0004-bm25-production-backend.md` must use the existing ADR format
+and record:
+
+- Context: Block 3.5 exact BM25 results beat the hybrid.
+- Decision: productionize BM25 with versioned per-tenant/KB indexes and atomic publish.
+- Alternatives: PostgreSQL FTS only, hybrid, external search service, incremental index.
+- Consequences: rebuild operation, memory per tenant/KB, no fallback, stale-window, and
+  deferred evidence selection.
+
+- [x] **Step 5: Update README.**
+
+Update the current status to Blocks 1–4 complete, add BM25 production retrieval to the
+capability list, change the roadmap row for Block 4 to complete with BM25 productionization,
+and move evidence selection/context construction to Block 5. Update known limitations:
+BM25 is the production retriever; hybrid remains a documented experiment; indexes rebuild
+in batch and must be rebuilt after ingestion.
+
+- [x] **Step 6: Run focused docs/validation checks and commit.**
+
+```bash
+uv run python -c "from pathlib import Path; assert Path('docs/architecture/bm25-retrieval.md').is_file()"
+uv run python -c "from pathlib import Path; assert Path('docs/design-decisions/0004-bm25-production-backend.md').is_file()"
+git add plan.md README.md docs/architecture/bm25-retrieval.md \
+  docs/design-decisions/0004-bm25-production-backend.md
+git commit -m "docs: document BM25 production retrieval"
+```
+
+---
+
+## Task 10: Final Verification
+
+**Files:**
+
+- Modify: `plan.md` (check off all tasks and record evidence)
+
+- [ ] **Step 1: Run the full unit suite.**
+
+```bash
+uv run pytest backend/tests/unit -q
+```
+
+Expected: all pass. Do not run the full integration suite until the database cleanup plan
+below is applied.
+
+- [ ] **Step 2: Run the BM25-focused integration tests.**
+
+```bash
+uv run pytest backend/tests/integration/test_bm25_production.py \
+  backend/tests/integration/test_database.py -q
+```
+
+Expected: all pass. Clean any non-default tenant rows created by the run.
+
+- [ ] **Step 3: Run Ruff.**
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+```
+
+Expected: no violations.
+
+- [ ] **Step 4: Verify the index and database counts.**
+
+```bash
+uv run python scripts/build_bm25_index.py --check
+uv run python - <<'PY'
+import asyncio
+import sys
+from uuid import UUID
+
+sys.path.insert(0, "backend")
+
+from sqlalchemy import text
+
+from app.db.session import build_engine, build_session_factory
+
+TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
+KNOWLEDGE_BASE_ID = UUID("00000000-0000-0000-0000-000000000002")
+
+
+async def main() -> None:
+    engine = build_engine()
+    async with build_session_factory(engine)() as session:
+        result = await session.execute(
+            text(
+                "SELECT count(*) FROM documents "
+                "WHERE tenant_id = :tenant_id AND knowledge_base_id = :knowledge_base_id"
+            ),
+            {"tenant_id": TENANT_ID, "knowledge_base_id": KNOWLEDGE_BASE_ID},
+        )
+        print("documents", result.scalar_one())
+        result = await session.execute(
+            text(
+                "SELECT count(*) FROM chunks "
+                "WHERE tenant_id = :tenant_id AND knowledge_base_id = :knowledge_base_id"
+            ),
+            {"tenant_id": TENANT_ID, "knowledge_base_id": KNOWLEDGE_BASE_ID},
+        )
+        print("chunks", result.scalar_one())
+    await engine.dispose()
+
+
+asyncio.run(main())
+PY
+```
+
+Expected: `34378` documents and `136383` chunks for the default tenant/KB, and the BM25
+check reports current.
+
+- [ ] **Step 5: Verify the evaluation output.**
+
+```bash
+uv run python - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path("data/processed/retrieval_dev_metrics_block4.json").read_text())
+print(report["modes"]["bm25"]["metrics"])
+print(report["modes"]["bm25"]["latency_top50"])
+PY
+```
+
+Confirm the acceptance targets from Task 9.
+
+- [ ] **Step 6: Verify the holdout was untouched and no index artifacts are staged.**
+
+```bash
+git status --short
+git diff --stat
+```
+
+Expected: no `data/indexes/` files staged; no holdout files modified; only intended source,
+tests, docs, `plan.md`, and dependency files.
+
+- [ ] **Step 7: Record completion in `plan.md` and commit.**
+
+Mark every Block 4 checkbox complete, add the measured metrics and index version, and
+commit:
+
+```bash
+git add plan.md
+git commit -m "docs: record Block 4 verification"
+```
+
+Do not push or merge unless the user explicitly asks.
+
+---
+
+### Block 4 Acceptance Checklist
+
+- [ ] `bm25s` and `PyStemmer` are production dependencies; lockfile is current.
+- [ ] Settings exist for index root, `k1`, `b`, and retention.
+- [ ] `data/indexes/` is ignored and no index artifacts are committed.
+- [ ] Manifest, catalog, fingerprint, tokenizer, and snapshot are implemented.
+- [ ] Version directories are immutable; `current.json` publish is atomic.
+- [ ] A failed build leaves the active index unchanged.
+- [ ] Retention keeps the active version plus the previous two.
+- [ ] Per-index build locking prevents concurrent rebuilds.
+- [ ] `--check` detects fingerprint mismatch and reports a rebuild command.
+- [ ] Missing/invalid/stale indexes fail fast; no PostgreSQL fallback.
+- [ ] Retriever validates `top_k`, returns `[]` for blank/stopword-only queries.
+- [ ] Source filters use adaptive overfetch and return top-k when possible.
+- [ ] Final content is fetched from PostgreSQL constrained by tenant/KB and source type.
+- [ ] Missing selected chunks raise `BM25IndexStale` with a rebuild command.
+- [ ] Rebuild/check CLI, query CLI, and evaluation mode work.
+- [ ] Development metrics reproduce Block 3.5 within a reasonable tolerance.
+- [ ] Top-50 BM25 latency p95 is below 200 ms.
+- [ ] Unit, focused integration, and Ruff checks pass.
+- [ ] Database counts remain clean; no non-default tenant rows remain.
+- [ ] Holdout remains untouched.
+- [ ] Architecture doc, ADR, README, and `plan.md` are updated.
+
+### Block 4 Risks
+
+| Risk | Mitigation |
+|---|---|
+| A rebuild races with readers | Atomic pointer swap; readers never see partial versions |
+| Two builders publish concurrently | Per-index `flock` fails fast; failed build leaves current pointer untouched |
+| Index is stale after ingestion | `--check` compares DB fingerprint; runtime raises on missing selected chunks; rebuild after ingestion |
+| Adaptive overfetch is slow under selective filters | Start at `top_k * 4`, double only when needed, cap at index size |
+| Full index build uses significant memory | Build in a single process; document memory expectations; keep retention small |
+| Old versions fill disk | Retention deletes all but active plus previous two |
+| Catalog/corpus mismatch | Manifest hash and row-count validation on load; fingerprint check in `--check` |
+| BM25 quality differs from benchmark | Use identical tokenizer/parameters; rerun dev evaluation; never tune on holdout |
+| Index artifacts enter git | `data/indexes/` in `.gitignore`; final `git status` check |
+| Integration tests pollute the DB | Focused integration runs plus non-default tenant cleanup |
+
+### Next Block Preview
+
+Block 5 should add evidence selection and context construction over BM25-retrieved chunks.
+Do not add reranking, generation, or holdout evaluation until Block 4 is verified and the
+BM25 production metrics are documented.

@@ -6,9 +6,10 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Blocks 1, 2, and 3 are complete. The ingestion pipeline, dense retrieval stack, and
-PostgreSQL FTS + hybrid retrieval stack are implemented, verified on the real subset,
-and ready for Block 4.**
+**Blocks 1 through 4 are complete. The ingestion pipeline, dense retrieval stack, and
+production BM25 retrieval path are implemented and verified on the real subset. BM25 is the
+production retriever; dense, PostgreSQL FTS, and hybrid RRF remain documented experiments.
+Evidence selection and context construction move to Block 5.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -22,16 +23,19 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - Dense retrieval with a leakage-safe interface and development recall/MRR metrics.
 - PostgreSQL full-text lexical retrieval with a generated `search_vector` and GIN index.
 - Hybrid retrieval with Reciprocal Rank Fusion (RRF) over dense and lexical candidates.
-- A unified development evaluator for dense, lexical, and hybrid modes.
+- Production BM25 retrieval with versioned, per-tenant/per-knowledge-base indexes and
+  atomic publish.
+- A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - Unit, integration, and real-subset tests.
 
 The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
 documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
 [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
-and [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md).
+[`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md), and
+[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md).
 
-Exact BM25, reranking, generation, the full benchmark evaluation harness,
-authentication, and the API are deliberately deferred to later blocks.
+Evidence selection, context construction, reranking, generation, the full benchmark
+evaluation harness, authentication, and the API are deliberately deferred to later blocks.
 
 ## Problem
 
@@ -73,14 +77,14 @@ Document source
   -> Chunker
   -> EmbeddingProvider
   -> PostgreSQL documents/chunks + pgvector
-  -> PostgreSQL full-text search index (GIN)
+  -> versioned BM25 index (production); PostgreSQL full-text search (GIN) experiment
 
 User question
   -> optional query rewriting/decomposition
-  -> dense retriever + sparse retriever
-  -> Reciprocal Rank Fusion
+  -> BM25 retriever (production)
+  -> optional dense + lexical + RRF hybrid experiment
   -> cross-encoder reranker
-  -> context builder
+  -> evidence selection and context builder
   -> Gemini generation
   -> answer + citations + abstention result
 ```
@@ -103,8 +107,8 @@ The backend is a modular monolith with independent functional modules:
 | LLM | Google Gemini |
 | Embeddings | BGE (`bge-large-en-v1.5` initially), optional Gemini embeddings |
 | Vector database | PostgreSQL + pgvector |
-| Sparse retrieval | PostgreSQL full-text search (GIN); exact BM25 later if justified |
-| Fusion | Reciprocal Rank Fusion |
+| Sparse retrieval | Production BM25 (`bm25s`); PostgreSQL full-text search (GIN) retained as a documented baseline |
+| Fusion | Reciprocal Rank Fusion (documented experiment, not the production path) |
 | Reranking | BGE cross-encoder |
 | Orchestration | LangChain, used minimally at the LLM boundary |
 | Evaluation | RAGAS for local development plus the official EnterpriseRAG-Bench protocol |
@@ -120,7 +124,9 @@ The backend is a modular monolith with independent functional modules:
 - Retrieval remains independent of the LLM provider.
 - Embedding generation remains independent of retrieval implementation.
 - Only one embedding model and dimension should be used per vector index.
-- PostgreSQL full-text search is not BM25.
+- PostgreSQL full-text search is not BM25; production retrieval uses `bm25s`.
+- BM25 indexes are per tenant/knowledge base, published atomically, and rebuilt in batch
+  after ingestion.
 - Many cross-encoders cap input at 512 tokens, so chunk size must remain compatible.
 - Langfuse self-hosting is operationally heavy and is deferred.
 
@@ -186,7 +192,7 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
-Implemented Blocks 1-3 structure:
+Implemented Blocks 1-4 structure:
 
 ```text
 productionRAG/
@@ -214,6 +220,9 @@ productionRAG/
 │   │   ├── evaluation/
 │   │   │   └── dev.py
 │   │   └── retrieval/
+│   │       ├── bm25.py
+│   │       ├── bm25_builder.py
+│   │       ├── bm25_index.py
 │   │       ├── dense.py
 │   │       ├── fusion.py
 │   │       ├── hybrid.py
@@ -236,6 +245,8 @@ productionRAG/
 │   ├── eval_dense_dev.py
 │   ├── lexical_search.py
 │   ├── hybrid_search.py
+│   ├── build_bm25_index.py
+│   ├── bm25_search.py
 │   └── eval_retrieval_dev.py
 ├── data/
 │   ├── raw/          # gitignored
@@ -245,11 +256,13 @@ productionRAG/
 │   ├── architecture/
 │   │   ├── ingestion.md
 │   │   ├── embeddings-and-retrieval.md
-│   │   └── hybrid-retrieval.md
+│   │   ├── hybrid-retrieval.md
+│   │   └── bm25-retrieval.md
 │   └── design-decisions/
 │       ├── 0001-dataset-subset.md
 │       ├── 0002-vector-store-and-embedding-runtime.md
-│       └── 0003-lexical-backend-and-fusion.md
+│       ├── 0003-lexical-backend-and-fusion.md
+│       └── 0004-bm25-production-backend.md
 ├── compose.yml
 ├── .env.example
 ├── pyproject.toml
@@ -359,6 +372,38 @@ The unified metrics file is written to
 PostgreSQL full-text search with `ts_rank_cd`, not exact BM25. Do not run the holdout
 split during development.
 
+### Block 4 workflow
+
+```bash
+# Start PostgreSQL and confirm the default tenant/KB corpus is loaded
+docker compose up -d db
+
+# Build and publish the production BM25 index for the default tenant/KB
+uv run python scripts/build_bm25_index.py \
+  --tenant-id 00000000-0000-0000-0000-000000000001 \
+  --knowledge-base-id 00000000-0000-0000-0000-000000000002
+
+# Verify the active index fingerprint against PostgreSQL
+uv run python scripts/build_bm25_index.py \
+  --tenant-id 00000000-0000-0000-0000-000000000001 \
+  --knowledge-base-id 00000000-0000-0000-0000-000000000002 \
+  --check
+
+# Query the production BM25 index
+uv run python scripts/bm25_search.py "How do I rotate an API key?" --top-k 5
+uv run python scripts/bm25_search.py "How do I rotate an API key?" \
+  --top-k 5 --source-type confluence --json
+
+# Evaluate BM25 on the 169 development questions
+uv run python scripts/eval_retrieval_dev.py \
+  --mode bm25 --top-k 20 \
+  --output data/processed/retrieval_dev_metrics_block4.json
+```
+
+Generated indexes live under `data/indexes/bm25/` (gitignored). Indexes are rebuilt in
+batch; rebuild the affected tenant/KB after ingestion. Do not run the holdout split during
+development.
+
 ### Testing
 
 ```bash
@@ -413,6 +458,19 @@ uv run ruff format --check .
 - `uv run ruff format --check .`: 68 files already formatted.
 - Final database state: 34,378 documents, 136,383 chunks, 136,383 embeddings, 0
   non-default rows (`34378|136383|136383`).
+- Holdout set: not used.
+
+### Block 4 verification evidence
+
+- Published BM25 index version `20261114T114342596160Z-9b59d71b6d36` for the default
+  tenant/KB with 34,378 documents and 136,383 indexed chunks.
+- `--check` reports `BM25 index is current`.
+- On-disk index version is about 181 MB; `data/indexes/` is gitignored.
+- BM25 development metrics cover 169 questions with 0 zero-result questions.
+- Top-50 BM25 latency: p50 10.4 ms, p95 11.3 ms, max 12.1 ms.
+- `scripts/build_bm25_index.py`, `scripts/bm25_search.py`, and the `bm25` evaluation mode
+  work against the real index.
+- Index artifacts and `data/processed/retrieval_dev_metrics_block4.json` are not tracked.
 - Holdout set: not used.
 
 ### Block 1 retrospective
@@ -489,6 +547,35 @@ where lexical returns matches. This is a documented limitation, not a hidden suc
 These are diagnostics, not benchmark claims. The 42-question holdout set remains
 untouched.
 
+## Block 4 measured results
+
+Block 4 productionized exact BM25 over `title + "\n" + content` with `bm25s` 0.3.16,
+PyStemmer 3.1.0, `k1=1.5`, `b=0.75`, and `method=lucene`. The default tenant/KB index was
+built from 34,378 documents and 136,383 chunks and published as version
+`20261114T114342596160Z-9b59d71b6d36` (about 181 MB on disk).
+
+Development retrieval metrics on the 169 development questions (`top_k=20`):
+
+| Metric | BM25 |
+|---|---:|
+| recall@1 | 0.5138 |
+| recall@5 | 0.7310 |
+| recall@10 | 0.7776 |
+| recall@20 | 0.8494 |
+| MRR | 0.6771 |
+| zero-result questions | 0 |
+| top-50 p50 latency | 10.4 ms |
+| top-50 p95 latency | 11.3 ms |
+| top-50 max latency | 12.1 ms |
+
+BM25 beats the Block 3 dense and hybrid results on every headline metric. It also
+reproduces the Block 3.5 benchmark exactly, so BM25 is now the production retriever. Dense,
+PostgreSQL FTS, and hybrid RRF remain available as documented experiments. Indexes rebuild
+in batch and must be rebuilt after ingestion.
+
+These are diagnostics, not benchmark claims. The 42-question holdout set remains
+untouched.
+
 ## Development Roadmap
 
 | Block | Focus | Status |
@@ -496,14 +583,15 @@ untouched.
 | 1 | Project setup, dataset subset, loading, normalization, chunking | complete |
 | 2 | Embeddings, PostgreSQL, pgvector, dense retrieval | complete |
 | 3 | PostgreSQL FTS, hybrid retrieval, Reciprocal Rank Fusion | complete |
-| 4 | Evidence selection and context construction | planned |
-| 5 | Cross-encoder reranking and retrieval optimization | planned |
-| 6 | Gemini integration, citations, and grounded generation | planned |
-| 7 | Evaluation framework and retrieval benchmarking | planned |
-| 8 | Hallucination control, abstention, multi-document reasoning | planned |
-| 9 | FastAPI, authentication, and multi-tenancy | planned |
-| 10 | Asynchronous ingestion and document lifecycle | planned |
-| 11 | Observability, frontend, Docker, and deployment | planned |
+| 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
+| 5 | Evidence selection and context construction | planned |
+| 6 | Cross-encoder reranking and retrieval optimization | planned |
+| 7 | Gemini integration, citations, and grounded generation | planned |
+| 8 | Evaluation framework and retrieval benchmarking | planned |
+| 9 | Hallucination control, abstention, multi-document reasoning | planned |
+| 10 | FastAPI, authentication, and multi-tenancy | planned |
+| 11 | Asynchronous ingestion and document lifecycle | planned |
+| 12 | Observability, frontend, Docker, and deployment | planned |
 
 ## Engineering Principles
 
@@ -518,10 +606,14 @@ untouched.
 
 ## Known Limitations
 
-- Block 3 stops at hybrid retrieval. There is no exact BM25, reranker, evidence selection, or generated answer yet.
-- The lexical backend is PostgreSQL full-text search (`ts_rank_cd`), not exact BM25.
-- Lexical retrieval is effectively non-functional on the development split: 156 of 169 questions return zero results because `websearch_to_tsquery` ANDs natural-language terms.
-- Hybrid gains over dense are small and hybrid recall@5 is slightly below dense.
+- Block 4 stops at BM25 retrieval. There is no reranker, evidence selection, context construction, or generated answer yet.
+- BM25 is the production retriever. Dense, PostgreSQL FTS, and hybrid RRF remain documented experiments, not the production path.
+- Hybrid is retained as an experiment; it measured below BM25 on every headline metric and hybrid recall@5 is slightly below dense.
+- BM25 indexes rebuild in batch. Adding, removing, or modifying chunks requires rebuilding the affected tenant/knowledge-base index.
+- No incremental BM25 updates or change-data-capture exist yet; `--check` detects staleness but does not repair it.
+- Each loaded BM25 index is held in process memory in addition to its on-disk footprint (about 181 MB for the default 136,383-chunk index).
+- Missing, invalid, or stale BM25 indexes fail fast with an actionable error; there is no PostgreSQL full-text fallback.
+- A long-running process keeps its cached BM25 snapshot until it reloads; a rebuild can create a stale window until reload or restart.
 - Block 1 uses a four-source development subset, not the full 511,962-document corpus.
 - PDF and OCR ingestion are not implemented or validated by this dataset.
 - The corpus has 34,378 document members but 34,375 unique `doc_id` values. The database uses content-addressed identity `(tenant_id, knowledge_base_id, source_type, doc_id, content_hash)` to preserve duplicate IDs.
@@ -529,21 +621,24 @@ untouched.
 - Document-version comparison is not supported by the dataset and requires a separate design.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
-- Dense, lexical, and hybrid retrieval have development-split diagnostics only; there are no official benchmark results yet.
-- English stemming and stopword removal are fixed by the PostgreSQL `english` text search configuration.
-- RRF uses ranks only and discards score magnitude; candidate depth (`candidate_k`) bounds what fusion can recover.
+- Dense, lexical, hybrid, and BM25 retrieval have development-split diagnostics only; there are no official benchmark results yet.
+- BM25 uses fixed English stemming, stopwords, and `k1`/`b`; changing them requires rebuilding the index.
+- PostgreSQL FTS still uses the database `english` text search configuration for the lexical experiment.
+- RRF uses ranks only and discards score magnitude; candidate depth (`candidate_k`) bounds what the hybrid experiment can recover.
 - The measured index was built with `float16` weights because the laptop GPU thermally throttles; queries must use the same dtype.
 - No multi-tenant authentication or authorization exists yet.
 
 ## Documentation
 
-- [`plan.md`](plan.md): detailed Block 1-3 implementation plan.
+- [`plan.md`](plan.md): detailed Block 1-4 implementation plan.
 - [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
 - [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md): embeddings, pgvector schema, loading, dense retrieval, and measured results.
 - [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md): lexical schema, PostgreSQL FTS query flow, RRF fusion, and measured hybrid results.
+- [`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md): production BM25 corpus, versioned index layout, atomic publish, runtime flow, operations, and measured results.
 - [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
 - [`docs/design-decisions/0002-vector-store-and-embedding-runtime.md`](docs/design-decisions/0002-vector-store-and-embedding-runtime.md): pgvector, BGE, PyTorch/CUDA, and dtype decisions.
 - [`docs/design-decisions/0003-lexical-backend-and-fusion.md`](docs/design-decisions/0003-lexical-backend-and-fusion.md): PostgreSQL FTS vs exact BM25, RRF, and measured results.
+- [`docs/design-decisions/0004-bm25-production-backend.md`](docs/design-decisions/0004-bm25-production-backend.md): BM25 productionization, versioned indexes, atomic publish, and measured results.
 - `docs/evaluation/`: evaluation methodology and results, added later.
 
 ## License and Attribution
