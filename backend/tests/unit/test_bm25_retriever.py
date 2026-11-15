@@ -67,14 +67,32 @@ class FakeManager:
         return self.snapshot
 
 
+class ZeroScoreSnapshot(FakeSnapshot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_calls = 0
+
+    def tokenize(self, query: str) -> list[str]:
+        del query
+        return ["zzzznotinvocabulary"]
+
+    def search(self, tokens: Sequence[str], k: int) -> tuple[list[int], list[float]]:
+        del tokens
+        self.search_calls += 1
+        indices = list(range(min(k, self.row_count)))
+        return indices, [0.0 for _ in indices]
+
+
 class FakeChunk:
     def __init__(self, chunk_id: str, source_type: str) -> None:
+        index = int(chunk_id.rsplit("-", 1)[1])
         self.chunk_id = chunk_id
-        self.doc_id = f"doc-{chunk_id}"
+        self.doc_id = f"doc-{index}"
         self.source_type = source_type
-        self.title = f"Title {chunk_id}"
-        self.chunk_index = 0
+        self.title = f"Title {index}"
+        self.chunk_index = index
         self.content = "needle"
+        self.content_hash = f"hash-{index}"
         self.doc_metadata = {}
 
 
@@ -117,6 +135,67 @@ async def test_retriever_overfetches_for_source_filter(
     results = await retriever.retrieve("needle", top_k=2, source_types=["pdf"])
 
     assert [result.chunk_id for result in results] == ["chunk-19"]
+
+
+async def test_retriever_returns_empty_for_out_of_vocabulary_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_get_chunks_by_ids(*args: object, **kwargs: object) -> list[FakeChunk]:
+        raise AssertionError("OOV query must not hydrate chunks")
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fail_get_chunks_by_ids)
+    retriever = BM25Retriever(
+        FakeManager(ZeroScoreSnapshot()),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    assert await retriever.retrieve("zzzznotinvocabulary", top_k=2) == []
+
+
+async def test_retriever_returns_empty_for_out_of_vocabulary_query_with_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_get_chunks_by_ids(*args: object, **kwargs: object) -> list[FakeChunk]:
+        raise AssertionError("OOV query must not hydrate chunks")
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fail_get_chunks_by_ids)
+    snapshot = ZeroScoreSnapshot()
+    retriever = BM25Retriever(
+        FakeManager(snapshot),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    assert await retriever.retrieve("zzzznotinvocabulary", top_k=2, source_types=["pdf"]) == []
+    assert snapshot.search_calls == 1
+
+
+async def test_retriever_rejects_stale_catalog_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = FakeSnapshot()
+
+    async def fake_get_chunks_by_ids(
+        session: object,
+        chunk_ids: Sequence[str],
+        **kwargs: object,
+    ) -> list[FakeChunk]:
+        del session, kwargs
+        return [FakeChunk(chunk_id, "jira") for chunk_id in chunk_ids]
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fake_get_chunks_by_ids)
+    retriever = BM25Retriever(
+        FakeManager(snapshot),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    with pytest.raises(BM25IndexStale, match="metadata"):
+        await retriever.retrieve("needle", top_k=2)
 
 
 async def test_retriever_rejects_missing_chunks(

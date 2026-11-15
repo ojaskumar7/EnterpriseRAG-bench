@@ -3878,7 +3878,8 @@ Invariants:
 - `len(catalog) == manifest.row_count == bm25s` row count.
 - `catalog[row_index].chunk_id` is the row identity used by search results.
 - Catalog order is `ORDER BY chunk_id`, so `row_index` is deterministic.
-- `corpus_fingerprint` is order-independent and covers `(chunk_id, content_hash, title)`.
+- `corpus_fingerprint` is order-independent and covers
+  `(chunk_id, doc_id, source_type, title, chunk_index, content_hash)`.
 - `current.json` contains `{"version": "...", "manifest_sha256": "..."}`.
 - A published version is never modified.
 - The active snapshot is immutable and safe to share across concurrent queries.
@@ -5784,8 +5785,8 @@ Expected targets relative to Block 3.5:
 If the metrics differ materially, stop and investigate before documenting. Do not tune
 on the holdout.
 
-Measured on 2026-11-14 for the default tenant/KB (`20261114T114342596160Z-9b59d71b6d36`,
-34,378 documents, 136,383 chunks, about 181 MB on disk). `--check` reported
+Measured on 2026-11-15 for the default tenant/KB (`20261115T131732353721Z-f79d12de1fc6`,
+34,378 documents, 136,383 chunks, about 181 MB on disk). Metadata-only `--check` reported
 `BM25 index is current`.
 
 | Metric | Measured | Target |
@@ -5796,9 +5797,9 @@ Measured on 2026-11-14 for the default tenant/KB (`20261114T114342596160Z-9b59d7
 | recall@20 | 0.8494 | approximately 0.8494 |
 | MRR | 0.6771 | approximately 0.6771 |
 | zero-result questions | 0 | 0 |
-| top-50 p50 latency | 10.4 ms | — |
-| top-50 p95 latency | 11.3 ms | `< 200 ms` |
-| top-50 max latency | 12.1 ms | — |
+| top-50 p50 latency | 8.5 ms | — |
+| top-50 p95 latency | 12.9 ms | `< 200 ms` |
+| top-50 max latency | 17.5 ms | — |
 
 The run reproduces the Block 3.5 benchmark and clears every target. No tuning was needed.
 Metrics are in `data/processed/retrieval_dev_metrics_block4.json` (gitignored).
@@ -5990,14 +5991,19 @@ Do not push or merge unless the user explicitly asks.
 
 ### Block 4 Verification Evidence
 
-Verified on 2026-11-14 from branch `block-4-bm25-production` (base `1990047`).
+Verified on 2026-11-15 from branch `block-4-bm25-production` after the final-review fix
+round on base `85c57d8`.
 
-- Unit suite: `133 passed` (`uv run pytest backend/tests/unit -q`).
-- Focused integration: `8 passed` (`test_bm25_production.py`, `test_database.py`).
+- Unit suite: `148 passed` (`uv run pytest backend/tests/unit -q`).
+- Focused integration: `9 passed` (`test_bm25_production.py`, `test_database.py`).
 - Ruff: `All checks passed!`; `82 files already formatted`.
-- Index version: `20261114T114342596160Z-9b59d71b6d36`; `--check` reported current at `row_count=136383`.
-- Database: default tenant/KB has `34378` documents and `136383` chunks; after cleanup `0` non-default documents and `0` non-default chunks remain.
-- Development evaluation (169 questions): recall@1 `0.5138`, recall@5 `0.7310`, recall@10 `0.7776`, recall@20 `0.8494`, MRR `0.6771`; top-50 latency p50 `10.4 ms`, p95 `11.3 ms`, max `12.1 ms`.
+- Index version: `20261115T131732353721Z-f79d12de1fc6`; metadata-only `--check` reported
+  current at `row_count=136383`.
+- Database: default tenant/KB has `34378` documents and `136383` chunks; after cleanup `0`
+  non-default documents and `0` non-default chunks remain.
+- Development evaluation (169 questions): recall@1 `0.5138`, recall@5 `0.7310`,
+  recall@10 `0.7776`, recall@20 `0.8494`, MRR `0.6771`; zero-result `0`; top-50 latency p50
+  `8.5 ms`, p95 `12.9 ms`, max `17.5 ms`.
 - Holdout untouched; `data/indexes/`, the metrics JSON, and `.superpowers/` remain untracked.
 
 ### Block 4 Risks

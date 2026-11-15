@@ -47,6 +47,24 @@ def test_build_publishes_loadable_snapshot(tmp_path: Path) -> None:
     assert snapshot.search(snapshot.tokenize("needle"), 2)[0] == [0, 1]
 
 
+def test_build_wires_requested_bm25_parameters(tmp_path: Path) -> None:
+    manifest = build_bm25_index(
+        corpus=_corpus(),
+        index_root=tmp_path,
+        tenant_id="tenant",
+        knowledge_base_id="kb",
+        k1=2.5,
+        b=0.3,
+    )
+
+    snapshot = BM25IndexManager(tmp_path).load(tenant_id="tenant", knowledge_base_id="kb")
+
+    assert manifest.k1 == 2.5
+    assert manifest.b == 0.3
+    assert snapshot.index.k1 == 2.5
+    assert snapshot.index.b == 0.3
+
+
 def test_empty_corpus_is_rejected(tmp_path: Path) -> None:
     try:
         build_bm25_index(

@@ -29,6 +29,7 @@ from app.retrieval.bm25_index import (
     BM25_STEMMER,
     BM25_STOPWORDS,
     BM25CatalogEntry,
+    BM25CorpusIdentity,
     BM25IndexManager,
     BM25Manifest,
     corpus_fingerprint,
@@ -75,14 +76,21 @@ async def load_bm25_corpus(
         )
     )
     result = await session.execute(
-        select(ChunkRecord)
+        select(
+            ChunkRecord.chunk_id,
+            ChunkRecord.doc_id,
+            ChunkRecord.source_type,
+            ChunkRecord.title,
+            ChunkRecord.chunk_index,
+            ChunkRecord.content,
+            ChunkRecord.content_hash,
+        )
         .where(
             ChunkRecord.tenant_id == tenant_id,
             ChunkRecord.knowledge_base_id == knowledge_base_id,
         )
         .order_by(ChunkRecord.chunk_id)
     )
-    rows = result.scalars().all()
     chunks = tuple(
         BM25BuildChunk(
             chunk_id=row.chunk_id,
@@ -93,9 +101,43 @@ async def load_bm25_corpus(
             content=row.content,
             content_hash=row.content_hash,
         )
-        for row in rows
+        for row in result
     )
     return BM25Corpus(chunks=chunks, document_count=int(document_count or 0))
+
+
+async def load_bm25_fingerprint_rows(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    knowledge_base_id: uuid.UUID,
+) -> list[BM25CorpusIdentity]:
+    """Load only the metadata needed to verify a corpus fingerprint."""
+
+    result = await session.execute(
+        select(
+            ChunkRecord.chunk_id,
+            ChunkRecord.doc_id,
+            ChunkRecord.source_type,
+            ChunkRecord.title,
+            ChunkRecord.chunk_index,
+            ChunkRecord.content_hash,
+        ).where(
+            ChunkRecord.tenant_id == tenant_id,
+            ChunkRecord.knowledge_base_id == knowledge_base_id,
+        )
+    )
+    return [
+        BM25CorpusIdentity(
+            chunk_id=row.chunk_id,
+            doc_id=row.doc_id,
+            source_type=row.source_type,
+            title=row.title,
+            chunk_index=row.chunk_index,
+            content_hash=row.content_hash,
+        )
+        for row in result
+    ]
 
 
 @contextmanager
@@ -117,13 +159,27 @@ def build_bm25_index(
     tenant_id: str,
     knowledge_base_id: str,
     retention: int = 2,
+    k1: float = BM25_K1,
+    b: float = BM25_B,
 ) -> BM25Manifest:
     chunks = tuple(sorted(corpus.chunks, key=lambda chunk: chunk.chunk_id))
     if not chunks:
         raise ValueError(f"no chunks found for tenant {tenant_id} and KB {knowledge_base_id}")
+    if k1 <= 0:
+        raise ValueError("k1 must be positive")
+    if not 0 <= b <= 1:
+        raise ValueError("b must be between 0 and 1")
 
     fingerprint = corpus_fingerprint(
-        (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in chunks
+        BM25CorpusIdentity(
+            chunk_id=chunk.chunk_id,
+            doc_id=chunk.doc_id,
+            source_type=chunk.source_type,
+            title=chunk.title,
+            chunk_index=chunk.chunk_index,
+            content_hash=chunk.content_hash,
+        )
+        for chunk in chunks
     )
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     index_version = f"{timestamp}-{fingerprint[:12]}"
@@ -137,7 +193,7 @@ def build_bm25_index(
             stemmer = Stemmer.Stemmer(BM25_STEMMER)
             texts = [f"{chunk.title}\n{chunk.content}" for chunk in chunks]
             tokens = tokenize_bm25(texts, stemmer)
-            index = bm25s.BM25(k1=BM25_K1, b=BM25_B, method=BM25_METHOD)
+            index = bm25s.BM25(k1=k1, b=b, method=BM25_METHOD)
             index.index(tokens, show_progress=False)
             index.save(temp_dir / BM25_INDEX_DIR, show_progress=False)
 
@@ -165,8 +221,8 @@ def build_bm25_index(
                 row_count=len(chunks),
                 corpus_fingerprint=fingerprint,
                 catalog_sha256=sha256_file(catalog_path),
-                k1=BM25_K1,
-                b=BM25_B,
+                k1=k1,
+                b=b,
                 method=BM25_METHOD,
                 stopwords=BM25_STOPWORDS,
                 stemmer=BM25_STEMMER,

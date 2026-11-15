@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import os
 import shutil
+import threading
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import bm25s
 import Stemmer
+
+logger = logging.getLogger(__name__)
 
 BM25_SCHEMA_VERSION = 1
 BM25_K1 = 1.5
@@ -116,27 +121,71 @@ class BM25Manifest:
         )
 
 
-def corpus_fingerprint(rows: Iterable[tuple[str, str, str]]) -> str:
+class BM25CorpusIdentity(NamedTuple):
+    """Retrieval-relevant chunk metadata covered by the corpus fingerprint."""
+
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content_hash: str
+
+
+def corpus_fingerprint(rows: Iterable[BM25CorpusIdentity]) -> str:
     digest = hashlib.sha256()
-    for chunk_id, content_hash, title in sorted(rows):
-        digest.update(chunk_id.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(content_hash.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(title.encode("utf-8"))
+    for row in sorted(rows):
+        for value in (
+            row.chunk_id,
+            row.doc_id,
+            row.source_type,
+            row.title,
+            str(row.chunk_index),
+            row.content_hash,
+        ):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
         digest.update(b"\n")
     return digest.hexdigest()
 
 
-def tokenize_bm25(texts: Sequence[str], stemmer: Any) -> list[list[str]]:
+def tokenize_bm25(
+    texts: Sequence[str],
+    stemmer: Any,
+    *,
+    stopwords: str = BM25_STOPWORDS,
+) -> list[list[str]]:
     tokenized = bm25s.tokenize(
         list(texts),
-        stopwords=BM25_STOPWORDS,
+        stopwords=stopwords,
         stemmer=stemmer,
         return_ids=False,
         show_progress=False,
     )
     return [[str(token) for token in row if str(token).strip()] for row in tokenized]
+
+
+class ThreadLocalStemmer:
+    """Create one PyStemmer instance per thread.
+
+    PyStemmer instances keep mutable internal state and are not safe to share
+    across threads. ``asyncio.to_thread`` can run snapshot tokenization on
+    arbitrary worker threads, so each thread gets its own stemmer.
+    """
+
+    def __init__(self, language: str = BM25_STEMMER) -> None:
+        self._language = language
+        self._local = threading.local()
+
+    def _stemmer(self) -> Any:
+        stemmer = getattr(self._local, "stemmer", None)
+        if stemmer is None:
+            stemmer = Stemmer.Stemmer(self._language)
+            self._local.stemmer = stemmer
+        return stemmer
+
+    def stemWords(self, words: Sequence[str]) -> list[str]:
+        return [str(word) for word in self._stemmer().stemWords(list(words))]
 
 
 def write_catalog(path: Path, entries: Iterable[BM25CatalogEntry]) -> None:
@@ -186,7 +235,11 @@ class BM25IndexSnapshot:
         return len(self.catalog)
 
     def tokenize(self, query: str) -> list[str]:
-        tokenized = tokenize_bm25([query], self.stemmer)
+        tokenized = tokenize_bm25(
+            [query],
+            self.stemmer,
+            stopwords=self.manifest.stopwords,
+        )
         return tokenized[0] if tokenized else []
 
     def search(self, tokens: Sequence[str], k: int) -> tuple[list[int], list[float]]:
@@ -208,7 +261,11 @@ class BM25IndexSnapshot:
                 f"{rebuild_command(self.manifest.tenant_id, self.manifest.knowledge_base_id)}"
             )
         ranked = sorted(
-            zip(row_indices, (float(score) for score in scores[0]), strict=True),
+            (
+                (index, float(score))
+                for index, score in zip(row_indices, scores[0], strict=True)
+                if float(score) > 0.0
+            ),
             key=lambda item: (-item[1], item[0]),
         )
         return [index for index, _ in ranked], [score for _, score in ranked]
@@ -230,6 +287,17 @@ def _fsync_dir(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_tree(path: Path) -> None:
+    """Fsync every file and directory below a version directory."""
+
+    directories = [item for item in path.rglob("*") if item.is_dir()]
+    for file_path in sorted(item for item in path.rglob("*") if item.is_file()):
+        _fsync_file(file_path)
+    for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        _fsync_dir(directory)
+    _fsync_dir(path)
+
+
 class BM25IndexStore:
     def __init__(self, index_root: Path, *, retention: int = 2) -> None:
         if retention < 1:
@@ -240,7 +308,12 @@ class BM25IndexStore:
     def tenant_root(self, tenant_id: str, knowledge_base_id: str) -> Path:
         return self.index_root / tenant_id / knowledge_base_id
 
-    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+    def _read_metadata(
+        self,
+        *,
+        tenant_id: str,
+        knowledge_base_id: str,
+    ) -> tuple[Path, BM25Manifest, tuple[BM25CatalogEntry, ...]]:
         root = self.tenant_root(tenant_id, knowledge_base_id)
         command = rebuild_command(tenant_id, knowledge_base_id)
         pointer_path = root / BM25_POINTER_FILE
@@ -298,6 +371,7 @@ class BM25IndexStore:
             raise BM25IndexStale(
                 f"BM25 schema {manifest.schema_version} is not supported; rebuild with: {command}"
             )
+        self._validate_manifest_config(manifest, version_name=version_name, command=command)
 
         catalog_path = version_dir / BM25_CATALOG_FILE
         try:
@@ -325,24 +399,100 @@ class BM25IndexStore:
                 f"BM25 catalog row indexes are invalid for version {version_name}; "
                 f"rebuild with: {command}"
             )
+        return version_dir, manifest, catalog
 
+    @staticmethod
+    def _validate_manifest_config(
+        manifest: BM25Manifest,
+        *,
+        version_name: str,
+        command: str,
+    ) -> None:
+        if manifest.method != BM25_METHOD:
+            raise BM25IndexStale(
+                f"BM25 method {manifest.method!r} is not supported for version "
+                f"{version_name}; rebuild with: {command}"
+            )
+        if manifest.stopwords != BM25_STOPWORDS:
+            raise BM25IndexStale(
+                f"BM25 stopwords {manifest.stopwords!r} are not supported for version "
+                f"{version_name}; rebuild with: {command}"
+            )
+        if manifest.stemmer != BM25_STEMMER:
+            raise BM25IndexStale(
+                f"BM25 stemmer {manifest.stemmer!r} is not supported for version "
+                f"{version_name}; rebuild with: {command}"
+            )
+        if not math.isfinite(manifest.k1) or manifest.k1 <= 0:
+            raise BM25IndexStale(
+                f"BM25 k1 {manifest.k1!r} is invalid for version {version_name}; "
+                f"rebuild with: {command}"
+            )
+        if not math.isfinite(manifest.b) or not 0 <= manifest.b <= 1:
+            raise BM25IndexStale(
+                f"BM25 b {manifest.b!r} is invalid for version {version_name}; "
+                f"rebuild with: {command}"
+            )
+
+    @staticmethod
+    def _validate_index_config(
+        index: bm25s.BM25,
+        manifest: BM25Manifest,
+        *,
+        version_name: str,
+        command: str,
+    ) -> None:
+        if not math.isclose(float(index.k1), manifest.k1, rel_tol=0.0, abs_tol=1e-12):
+            raise BM25IndexStale(
+                f"BM25 index k1 {index.k1!r} does not match manifest k1 "
+                f"{manifest.k1!r} for version {version_name}; rebuild with: {command}"
+            )
+        if not math.isclose(float(index.b), manifest.b, rel_tol=0.0, abs_tol=1e-12):
+            raise BM25IndexStale(
+                f"BM25 index b {index.b!r} does not match manifest b "
+                f"{manifest.b!r} for version {version_name}; rebuild with: {command}"
+            )
+        if index.method != manifest.method:
+            raise BM25IndexStale(
+                f"BM25 index method {index.method!r} does not match manifest method "
+                f"{manifest.method!r} for version {version_name}; rebuild with: {command}"
+            )
+        num_docs = index.scores.get("num_docs") if isinstance(index.scores, dict) else None
+        if num_docs is None or int(num_docs) != manifest.row_count:
+            raise BM25IndexStale(
+                f"BM25 index has {num_docs!r} rows but manifest expects "
+                f"{manifest.row_count} for version {version_name}; rebuild with: {command}"
+            )
+
+    def load(self, *, tenant_id: str, knowledge_base_id: str) -> BM25IndexSnapshot:
+        version_dir, manifest, catalog = self._read_metadata(
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        command = rebuild_command(tenant_id, knowledge_base_id)
         try:
             index = bm25s.BM25.load(
                 version_dir / BM25_INDEX_DIR,
                 load_corpus=False,
                 show_progress=False,
             )
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, EOFError) as exc:
             raise BM25IndexUnavailable(
-                f"BM25 index files are unreadable for version {version_name}; "
+                f"BM25 index files are unreadable for version {manifest.version}; "
                 f"rebuild with: {command}"
             ) from exc
+        self._validate_index_config(
+            index,
+            manifest,
+            version_name=manifest.version,
+            command=command,
+        )
 
         return BM25IndexSnapshot(
             manifest=manifest,
             catalog=catalog,
             index=index,
-            stemmer=Stemmer.Stemmer(BM25_STEMMER),
+            stemmer=ThreadLocalStemmer(manifest.stemmer),
         )
 
     def check(
@@ -352,13 +502,16 @@ class BM25IndexStore:
         knowledge_base_id: str,
         expected_fingerprint: str,
     ) -> BM25Manifest:
-        snapshot = self.load(tenant_id=tenant_id, knowledge_base_id=knowledge_base_id)
-        if snapshot.manifest.corpus_fingerprint != expected_fingerprint:
+        _version_dir, manifest, _catalog = self._read_metadata(
+            tenant_id=tenant_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        if manifest.corpus_fingerprint != expected_fingerprint:
             raise BM25IndexStale(
                 f"BM25 index is stale for tenant {tenant_id} and KB {knowledge_base_id}; "
                 f"rebuild with: {rebuild_command(tenant_id, knowledge_base_id)}"
             )
-        return snapshot.manifest
+        return manifest
 
     def publish(
         self,
@@ -378,6 +531,7 @@ class BM25IndexStore:
                 f"and KB {knowledge_base_id}"
             )
 
+        _fsync_tree(temp_dir)
         temp_dir.replace(target)
         _fsync_dir(versions_dir)
         pointer = {
@@ -397,16 +551,23 @@ class BM25IndexStore:
 
     def _cleanup(self, root: Path, *, active: str) -> None:
         versions_dir = root / "versions"
-        versions = sorted(
-            path
-            for path in versions_dir.iterdir()
-            if path.is_dir() and not path.name.startswith(".")
-        )
-        keep = {path.name for path in versions[-(self.retention + 1) :]}
-        keep.add(active)
-        for path in versions:
-            if path.name not in keep:
-                shutil.rmtree(path, ignore_errors=True)
+        try:
+            versions = sorted(
+                path
+                for path in versions_dir.iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            )
+            keep = {path.name for path in versions[-(self.retention + 1) :]}
+            keep.add(active)
+            for path in versions:
+                if path.name not in keep:
+                    shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            logger.warning(
+                "BM25 retention cleanup failed for %s; published version remains active",
+                root,
+                exc_info=True,
+            )
 
 
 class BM25IndexManager:
@@ -448,11 +609,12 @@ class BM25IndexManager:
         temp_dir: Path,
         manifest: BM25Manifest,
     ) -> BM25Manifest:
-        result = self._store.publish(
-            tenant_id=tenant_id,
-            knowledge_base_id=knowledge_base_id,
-            temp_dir=temp_dir,
-            manifest=manifest,
-        )
-        self._cache.clear()
-        return result
+        try:
+            return self._store.publish(
+                tenant_id=tenant_id,
+                knowledge_base_id=knowledge_base_id,
+                temp_dir=temp_dir,
+                manifest=manifest,
+            )
+        finally:
+            self._cache.clear()

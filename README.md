@@ -383,7 +383,7 @@ uv run python scripts/build_bm25_index.py \
   --tenant-id 00000000-0000-0000-0000-000000000001 \
   --knowledge-base-id 00000000-0000-0000-0000-000000000002
 
-# Verify the active index fingerprint against PostgreSQL
+# Verify the active index metadata and fingerprint against PostgreSQL
 uv run python scripts/build_bm25_index.py \
   --tenant-id 00000000-0000-0000-0000-000000000001 \
   --knowledge-base-id 00000000-0000-0000-0000-000000000002 \
@@ -462,12 +462,12 @@ uv run ruff format --check .
 
 ### Block 4 verification evidence
 
-- Published BM25 index version `20261114T114342596160Z-9b59d71b6d36` for the default
+- Published BM25 index version `20261115T131732353721Z-f79d12de1fc6` for the default
   tenant/KB with 34,378 documents and 136,383 indexed chunks.
 - `--check` reports `BM25 index is current`.
 - On-disk index version is about 181 MB; `data/indexes/` is gitignored.
 - BM25 development metrics cover 169 questions with 0 zero-result questions.
-- Top-50 BM25 latency: p50 10.4 ms, p95 11.3 ms, max 12.1 ms.
+- Top-50 BM25 latency: p50 8.5 ms, p95 12.9 ms, max 17.5 ms.
 - `scripts/build_bm25_index.py`, `scripts/bm25_search.py`, and the `bm25` evaluation mode
   work against the real index.
 - Index artifacts and `data/processed/retrieval_dev_metrics_block4.json` are not tracked.
@@ -552,7 +552,7 @@ untouched.
 Block 4 productionized exact BM25 over `title + "\n" + content` with `bm25s` 0.3.16,
 PyStemmer 3.1.0, `k1=1.5`, `b=0.75`, and `method=lucene`. The default tenant/KB index was
 built from 34,378 documents and 136,383 chunks and published as version
-`20261114T114342596160Z-9b59d71b6d36` (about 181 MB on disk).
+`20261115T131732353721Z-f79d12de1fc6` (about 181 MB on disk).
 
 Development retrieval metrics on the 169 development questions (`top_k=20`):
 
@@ -564,9 +564,9 @@ Development retrieval metrics on the 169 development questions (`top_k=20`):
 | recall@20 | 0.8494 |
 | MRR | 0.6771 |
 | zero-result questions | 0 |
-| top-50 p50 latency | 10.4 ms |
-| top-50 p95 latency | 11.3 ms |
-| top-50 max latency | 12.1 ms |
+| top-50 p50 latency | 8.5 ms |
+| top-50 p95 latency | 12.9 ms |
+| top-50 max latency | 17.5 ms |
 
 BM25 beats the Block 3 dense and hybrid results on every headline metric. It also
 reproduces the Block 3.5 benchmark exactly, so BM25 is now the production retriever. Dense,
@@ -622,7 +622,7 @@ untouched.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
 - Dense, lexical, hybrid, and BM25 retrieval have development-split diagnostics only; there are no official benchmark results yet.
-- BM25 uses fixed English stemming, stopwords, and `k1`/`b`; changing them requires rebuilding the index.
+- BM25 uses fixed English stemming and stopwords; `k1`/`b` are settings recorded in the manifest, and changing them requires rebuilding the index.
 - PostgreSQL FTS still uses the database `english` text search configuration for the lexical experiment.
 - RRF uses ranks only and discards score magnitude; candidate depth (`candidate_k`) bounds what the hybrid experiment can recover.
 - The measured index was built with `float16` weights because the laptop GPU thermally throttles; queries must use the same dtype.

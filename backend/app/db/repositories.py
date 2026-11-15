@@ -58,6 +58,20 @@ class LexicalSearchResult:
     rank: float
 
 
+@dataclass(frozen=True)
+class ChunkLookup:
+    """The chunk fields required for BM25 result hydration."""
+
+    chunk_id: str
+    doc_id: str
+    source_type: str
+    title: str
+    chunk_index: int
+    content: str
+    content_hash: str
+    doc_metadata: dict[str, Any]
+
+
 async def upsert_documents(
     session: AsyncSession,
     documents: Sequence[DocumentUpsert],
@@ -251,11 +265,22 @@ async def get_chunks_by_ids(
     tenant_id: uuid.UUID,
     knowledge_base_id: uuid.UUID,
     source_types: Sequence[str] | None = None,
-) -> list[ChunkRecord]:
+) -> list[ChunkLookup]:
+    """Return only the chunk fields needed to hydrate BM25 hits."""
+
     if not chunk_ids:
         return []
 
-    statement = select(ChunkRecord).where(
+    statement = select(
+        ChunkRecord.chunk_id,
+        ChunkRecord.doc_id,
+        ChunkRecord.source_type,
+        ChunkRecord.title,
+        ChunkRecord.chunk_index,
+        ChunkRecord.content,
+        ChunkRecord.content_hash,
+        ChunkRecord.doc_metadata,
+    ).where(
         ChunkRecord.tenant_id == tenant_id,
         ChunkRecord.knowledge_base_id == knowledge_base_id,
         ChunkRecord.chunk_id.in_(list(chunk_ids)),
@@ -263,7 +288,19 @@ async def get_chunks_by_ids(
     if source_types:
         statement = statement.where(ChunkRecord.source_type.in_(list(source_types)))
     result = await session.execute(statement)
-    return list(result.scalars())
+    return [
+        ChunkLookup(
+            chunk_id=row.chunk_id,
+            doc_id=row.doc_id,
+            source_type=row.source_type,
+            title=row.title,
+            chunk_index=row.chunk_index,
+            content=row.content,
+            content_hash=row.content_hash,
+            doc_metadata=row.doc_metadata,
+        )
+        for row in result
+    ]
 
 
 async def count_rows(

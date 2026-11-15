@@ -64,10 +64,13 @@ class BM25Retriever:
         selected: list[tuple[BM25CatalogEntry, float]] = []
         while True:
             indices, scores = await asyncio.to_thread(snapshot.search, tokens, candidate_k)
+            if not indices or not any(float(score) > 0.0 for score in scores):
+                break
             selected = [
                 (snapshot.catalog[index], score)
                 for index, score in zip(indices, scores, strict=True)
-                if allowed is None or snapshot.catalog[index].source_type in allowed
+                if score > 0.0
+                and (allowed is None or snapshot.catalog[index].source_type in allowed)
             ]
             if len(selected) >= top_k or candidate_k >= snapshot.row_count:
                 break
@@ -98,6 +101,27 @@ class BM25Retriever:
                 f"{tenant_id} and KB {knowledge_base_id}; rebuild with: "
                 f"{rebuild_command(tenant_id, knowledge_base_id)}"
             )
+
+        for entry, _score in selected:
+            row = by_id[entry.chunk_id]
+            if (
+                entry.doc_id,
+                entry.source_type,
+                entry.title,
+                entry.chunk_index,
+                entry.content_hash,
+            ) != (
+                row.doc_id,
+                row.source_type,
+                row.title,
+                row.chunk_index,
+                row.content_hash,
+            ):
+                raise BM25IndexStale(
+                    f"BM25 index metadata for chunk {entry.chunk_id} does not match "
+                    f"PostgreSQL for tenant {tenant_id} and KB {knowledge_base_id}; "
+                    f"rebuild with: {rebuild_command(tenant_id, knowledge_base_id)}"
+                )
 
         return [
             RetrievedChunk(

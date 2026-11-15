@@ -13,7 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 from app.db.session import build_engine, build_session_factory  # noqa: E402
-from app.retrieval.bm25_builder import build_bm25_index, load_bm25_corpus  # noqa: E402
+from app.retrieval.bm25_builder import (  # noqa: E402
+    build_bm25_index,
+    load_bm25_corpus,
+    load_bm25_fingerprint_rows,
+)
 from app.retrieval.bm25_index import (  # noqa: E402
     BM25IndexError,
     BM25IndexManager,
@@ -43,25 +47,28 @@ async def run(args: argparse.Namespace, settings: Settings) -> None:
     engine = build_engine(settings)
     session_factory = build_session_factory(engine)
     try:
+        manager = BM25IndexManager(args.index_root, retention=args.retention)
+        if args.check:
+            async with session_factory() as session:
+                identity_rows = await load_bm25_fingerprint_rows(
+                    session,
+                    tenant_id=args.tenant_id,
+                    knowledge_base_id=args.knowledge_base_id,
+                )
+            manifest = manager.check(
+                tenant_id=str(args.tenant_id),
+                knowledge_base_id=str(args.knowledge_base_id),
+                expected_fingerprint=corpus_fingerprint(identity_rows),
+            )
+            print(f"BM25 index is current: version={manifest.version} rows={manifest.row_count}")
+            return
+
         async with session_factory() as session:
             corpus = await load_bm25_corpus(
                 session,
                 tenant_id=args.tenant_id,
                 knowledge_base_id=args.knowledge_base_id,
             )
-        expected = corpus_fingerprint(
-            (chunk.chunk_id, chunk.content_hash, chunk.title) for chunk in corpus.chunks
-        )
-        manager = BM25IndexManager(args.index_root, retention=args.retention)
-        if args.check:
-            manifest = manager.check(
-                tenant_id=str(args.tenant_id),
-                knowledge_base_id=str(args.knowledge_base_id),
-                expected_fingerprint=expected,
-            )
-            print(f"BM25 index is current: version={manifest.version} rows={manifest.row_count}")
-            return
-
         manifest = await asyncio.to_thread(
             build_bm25_index,
             corpus=corpus,
@@ -69,6 +76,8 @@ async def run(args: argparse.Namespace, settings: Settings) -> None:
             tenant_id=str(args.tenant_id),
             knowledge_base_id=str(args.knowledge_base_id),
             retention=args.retention,
+            k1=settings.bm25_k1,
+            b=settings.bm25_b,
         )
         print(
             f"Published BM25 index: version={manifest.version} "

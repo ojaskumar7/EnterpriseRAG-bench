@@ -302,6 +302,8 @@ async def test_get_chunks_by_ids_enforces_tenant_and_source(session: AsyncSessio
         source_types=[chunk.source_type],
     )
     assert [row.chunk_id for row in rows] == [chunk.chunk_id]
+    assert not hasattr(rows[0], "embedding")
+    assert not hasattr(rows[0], "search_vector")
 
     wrong_tenant = await get_chunks_by_ids(
         session,

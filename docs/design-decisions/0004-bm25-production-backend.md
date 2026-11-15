@@ -67,24 +67,34 @@ silent fallback would hide a broken production index.
 
 ### Configuration
 
-Use one tokenizer and scoring configuration for build and query: `k1=1.5`, `b=0.75`,
-`method="lucene"`, English stopwords, and `PyStemmer("english")`. Text is
-`title + "\n" + content`; the title is not separately weighted. `corpus_fingerprint` is an
-order-independent SHA256 over sorted `(chunk_id, content_hash, title)` and drives `--check`.
+Use one tokenizer and scoring configuration for build and query: `k1` and `b` come from
+settings (defaults 1.5 and 0.75), `method="lucene"`, English stopwords, and
+`PyStemmer("english")`. Text is `title + "\n" + content`; the title is not separately
+weighted. The build records the active parameters in the manifest and load validates them
+against the stored index. `corpus_fingerprint` is an order-independent SHA256 over sorted
+`(chunk_id, doc_id, source_type, title, chunk_index, content_hash)` and drives `--check`.
+Query-time metadata mismatches also raise `BM25IndexStale`.
 
 ## Consequences
 
+- **Durable publish.** Every version file and directory is fsynced before the atomic
+  pointer swap. Retention cleanup is best-effort and logged, and the manager cache is
+  cleared even if a post-swap step fails.
+- **Concurrent queries.** Snapshots are immutable, and query tokenization uses a
+  thread-local PyStemmer instance so concurrent `asyncio.to_thread` workers do not share
+  stemmer state.
 - **Rebuild operation.** Ingestion changes require a batch rebuild of the affected
   tenant/KB index. There is no incremental update or change-data-capture. `--check` detects
-  a stale fingerprint but does not repair it.
+  a stale fingerprint without loading the full `bm25s` index but does not repair it.
 - **Memory per tenant/KB.** Each loaded index is held in process memory in addition to its
   on-disk footprint. The measured 136,383-chunk version is about 181 MB on disk; serving
   many tenant/KB indexes from one process increases memory proportionally.
 - **No fallback.** A missing or stale index is a query-time error, not a quality
   degradation. Operators must rebuild or restore the index.
 - **Stale window.** A long-running process keeps its cached snapshot until it calls
-  `reload()`. Queries that select chunks deleted from PostgreSQL fail with an actionable
-  stale error rather than returning partial results.
+  `reload()`. Queries that select chunks deleted from PostgreSQL, or whose selected
+  metadata no longer matches the catalog, fail with an actionable stale error rather than
+  returning partial or mislabeled results.
 - **Batch-only freshness.** Freshness is bounded by the rebuild cadence, not by ingestion
   transactions.
 - **Deferred evidence selection.** BM25 returns ranked chunks only. Evidence selection,
@@ -105,9 +115,9 @@ order-independent SHA256 over sorted `(chunk_id, content_hash, title)` and drive
 
 ## Measured Results
 
-Measured on 2026-11-14 for the default tenant/KB (34,378 documents, 136,383 chunks):
+Measured on 2026-11-15 for the default tenant/KB (34,378 documents, 136,383 chunks):
 
-- Index version: `20261114T114342596160Z-9b59d71b6d36`
+- Index version: `20261115T131732353721Z-f79d12de1fc6`
 - `bm25s` 0.3.16, PyStemmer 3.1.0, `k1=1.5`, `b=0.75`, `method=lucene`
 - On-disk version size: about 181 MB
 - `--check`: current
@@ -122,7 +132,7 @@ Development metrics over the 169 development questions at `top_k=20`:
 | recall@20 | 0.8494 |
 | MRR | 0.6771 |
 | zero-result questions | 0 |
-| top-50 p95 latency | 11.3 ms |
+| top-50 p95 latency | 12.9 ms |
 
 The production build reproduces the Block 3.5 benchmark within measurement noise and
 clears every Block 4 target. The 42-question holdout split was not run or tuned on.
