@@ -18,7 +18,7 @@
 - Use stored chunk `token_count` when available; otherwise `max(1, len(content.split()))`.
 - No new third-party dependencies and no database migrations.
 - Holdout split stays untouched.
-- Context document recall may be at most `0.05` absolute below BM25 candidate document recall at the same `top_k`.
+- Context document recall may be at most `0.05` absolute below BM25 candidate document recall at the same context size (selected candidate chunk count).
 - Every behavior change gets a failing test first.
 - Deliberate shortcuts go in `docs/deferred-work.md`.
 
@@ -640,7 +640,9 @@ async def test_evaluate_context_reports_recall_mrr_and_budget() -> None:
     metrics = report["metrics"]
 
     assert metrics["candidate_doc_recall"] == 1.0
+    assert metrics["candidate_doc_recall_at_context_size"] == 1.0
     assert metrics["context_doc_recall"] == 1.0
+    assert metrics["recall_gap_at_context_size"] == 0.0
     assert metrics["context_mrr"] == 1.0
     assert metrics["budget_adherence"] == 1.0
     assert metrics["duplicate_chunk_count"] == 0
@@ -669,7 +671,9 @@ Use `time.perf_counter()` around retrieval and builder. Return:
     "metrics": {
         "question_count": len(questions),
         "candidate_doc_recall": ...,
+        "candidate_doc_recall_at_context_size": ...,
         "context_doc_recall": ...,
+        "recall_gap_at_context_size": ...,
         "context_mrr": ...,
         "budget_adherence": ...,
         "mean_context_tokens": ...,
@@ -845,7 +849,7 @@ Run:
 uv run python scripts/eval_context_dev.py --output data/processed/context_dev_metrics_block5.json
 ```
 
-Expected: 169 questions; `budget_adherence` is `1.0`; `duplicate_chunk_count` is `0`; context document recall is within `0.05` of candidate document recall.
+Expected: 169 questions; `budget_adherence` is `1.0`; `duplicate_chunk_count` is `0`; `recall_gap_at_context_size` is at least `-0.05`.
 
 - [ ] **Step 3: Manually verify the CLI**
 

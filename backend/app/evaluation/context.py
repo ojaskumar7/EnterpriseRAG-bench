@@ -78,6 +78,7 @@ async def evaluate_context(
         max_chunks_per_doc=max_chunks_per_doc,
     )
     candidate_recalls: list[float] = []
+    candidate_recalls_at_context_size: list[float] = []
     context_recalls: list[float] = []
     reciprocal_ranks: list[float] = []
     context_tokens: list[float] = []
@@ -107,14 +108,23 @@ async def evaluate_context(
         total_latencies.append(total_ms)
 
         candidate_doc_ids = list(dict.fromkeys(candidate.doc_id for candidate in candidates))
+        comparable_candidates = candidates[: len(context.blocks)]
+        candidate_doc_ids_at_context_size = list(
+            dict.fromkeys(candidate.doc_id for candidate in comparable_candidates)
+        )
         context_doc_ids = list(dict.fromkeys(block.doc_id for block in context.blocks))
         selected_chunk_ids = [block.chunk_id for block in context.blocks]
         candidate_recall = _recall(question.expected_doc_ids, set(candidate_doc_ids))
+        candidate_recall_at_context_size = _recall(
+            question.expected_doc_ids,
+            set(candidate_doc_ids_at_context_size),
+        )
         context_recall = _recall(question.expected_doc_ids, set(context_doc_ids))
         mrr = _mrr(question.expected_doc_ids, context)
         within_budget = context.token_count <= token_budget
 
         candidate_recalls.append(candidate_recall)
+        candidate_recalls_at_context_size.append(candidate_recall_at_context_size)
         context_recalls.append(context_recall)
         reciprocal_ranks.append(mrr)
         context_tokens.append(float(context.token_count))
@@ -131,9 +141,11 @@ async def evaluate_context(
                 "question_id": question.question_id,
                 "expected_doc_ids": list(question.expected_doc_ids),
                 "candidate_doc_ids": candidate_doc_ids,
+                "candidate_doc_ids_at_context_size": candidate_doc_ids_at_context_size,
                 "context_doc_ids": context_doc_ids,
                 "selected_chunk_ids": selected_chunk_ids,
                 "candidate_doc_recall": candidate_recall,
+                "candidate_doc_recall_at_context_size": candidate_recall_at_context_size,
                 "context_doc_recall": context_recall,
                 "context_mrr": mrr,
                 "token_count": context.token_count,
@@ -152,7 +164,14 @@ async def evaluate_context(
     metrics = {
         "question_count": question_count,
         "candidate_doc_recall": sum(candidate_recalls) / question_count,
+        "candidate_doc_recall_at_context_size": (
+            sum(candidate_recalls_at_context_size) / question_count
+        ),
         "context_doc_recall": sum(context_recalls) / question_count,
+        "recall_gap_at_context_size": (
+            sum(context_recalls) - sum(candidate_recalls_at_context_size)
+        )
+        / question_count,
         "context_mrr": sum(reciprocal_ranks) / question_count,
         "budget_adherence": sum(budget_passes) / question_count,
         "mean_context_tokens": sum(context_tokens) / question_count,

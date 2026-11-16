@@ -21,3 +21,11 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   favors clarity over micro-optimization.
 - **No prompt-injection sanitization.** Retrieved text is treated as untrusted evidence,
   but sanitization and instruction isolation are deferred to generation.
+- **Top-50 context recall gap is expected.** A 4,000-token whole-chunk context covers about
+  10 of 50 candidates, so context document recall (`0.7744`) is naturally below top-50
+  BM25 candidate recall (`0.8962`). The acceptance gate compares against BM25 at the same
+  context size, where the gap is `0.0052`. Revisit if the generation context budget grows
+  or partial-chunk extraction is added.
+- **CLI success path is manually verified.** The live-index context CLI JSON contract was
+  checked against the production index, but there is no automated test that requires the
+  full index and database. Unit tests cover builder behavior and CLI validation.

@@ -6,10 +6,10 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Blocks 1 through 4 are complete. The ingestion pipeline, dense retrieval stack, and
-production BM25 retrieval path are implemented and verified on the real subset. BM25 is the
-production retriever; dense, PostgreSQL FTS, and hybrid RRF remain documented experiments.
-Evidence selection and context construction move to Block 5.**
+**Blocks 1 through 5 are complete. The ingestion pipeline, dense retrieval stack,
+production BM25 retrieval path, and token-budgeted context construction are implemented and
+verified on the real subset. BM25 is the production retriever; dense, PostgreSQL FTS, and
+hybrid RRF remain documented experiments. Reranking and generation move to later blocks.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -25,17 +25,21 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - Hybrid retrieval with Reciprocal Rank Fusion (RRF) over dense and lexical candidates.
 - Production BM25 retrieval with versioned, per-tenant/per-knowledge-base indexes and
   atomic publish.
+- Deterministic, citation-ready context construction under a 4,000-token budget with a
+  three-chunk-per-document cap.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
+- A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
 
 The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
 documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
 [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
-[`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md), and
-[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md).
+[`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md),
+[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md), and
+[`docs/architecture/context-construction.md`](docs/architecture/context-construction.md).
 
-Evidence selection, context construction, reranking, generation, the full benchmark
-evaluation harness, authentication, and the API are deliberately deferred to later blocks.
+Reranking, generation, the full benchmark evaluation harness, authentication, and the API
+are deliberately deferred to later blocks.
 
 ## Problem
 
@@ -192,7 +196,7 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
-Implemented Blocks 1-4 structure:
+Implemented Blocks 1-5 structure:
 
 ```text
 productionRAG/
@@ -217,7 +221,12 @@ productionRAG/
 │   │   │   ├── models.py
 │   │   │   ├── repositories.py
 │   │   │   └── session.py
+│   │   ├── context/
+│   │   │   ├── builder.py
+│   │   │   ├── render.py
+│   │   │   └── types.py
 │   │   ├── evaluation/
+│   │   │   ├── context.py
 │   │   │   └── dev.py
 │   │   └── retrieval/
 │   │       ├── bm25.py
@@ -247,7 +256,9 @@ productionRAG/
 │   ├── hybrid_search.py
 │   ├── build_bm25_index.py
 │   ├── bm25_search.py
-│   └── eval_retrieval_dev.py
+│   ├── build_context.py
+│   ├── eval_retrieval_dev.py
+│   └── eval_context_dev.py
 ├── data/
 │   ├── raw/          # gitignored
 │   ├── processed/    # gitignored
@@ -257,12 +268,14 @@ productionRAG/
 │   │   ├── ingestion.md
 │   │   ├── embeddings-and-retrieval.md
 │   │   ├── hybrid-retrieval.md
-│   │   └── bm25-retrieval.md
+│   │   ├── bm25-retrieval.md
+│   │   └── context-construction.md
 │   └── design-decisions/
 │       ├── 0001-dataset-subset.md
 │       ├── 0002-vector-store-and-embedding-runtime.md
 │       ├── 0003-lexical-backend-and-fusion.md
-│       └── 0004-bm25-production-backend.md
+│       ├── 0004-bm25-production-backend.md
+│       └── 0005-context-construction.md
 ├── compose.yml
 ├── .env.example
 ├── pyproject.toml
@@ -404,6 +417,23 @@ Generated indexes live under `data/indexes/bm25/` (gitignored). Indexes are rebu
 batch; rebuild the affected tenant/KB after ingestion. Do not run the holdout split during
 development.
 
+### Block 5 workflow
+
+```bash
+# Preview the citation-ready context built from BM25 top-50
+uv run python scripts/build_context.py "How do I rotate an API key?"   --top-k 50 --token-budget 4000 --max-chunks-per-doc 3
+
+# Inspect the structured context
+uv run python scripts/build_context.py "How do I rotate an API key?" --json
+
+# Evaluate context construction on the 169 development questions
+uv run python scripts/eval_context_dev.py   --output data/processed/context_dev_metrics_block5.json
+```
+
+The context builder deduplicates chunks, allows at most three chunks per document, and
+never exceeds the token budget. It uses stored chunk token counts when available. Context
+evaluation does not use the holdout split.
+
 ### Testing
 
 ```bash
@@ -471,6 +501,21 @@ uv run ruff format --check .
 - `scripts/build_bm25_index.py`, `scripts/bm25_search.py`, and the `bm25` evaluation mode
   work against the real index.
 - Index artifacts and `data/processed/retrieval_dev_metrics_block4.json` are not tracked.
+- Holdout set: not used.
+
+### Block 5 verification evidence
+
+- Context builder, renderer, preview CLI, and context evaluation are implemented.
+- Development evaluation covers 169 questions at BM25 top-50 with a 4,000-token budget.
+- Budget adherence is `1.0`; duplicate chunks and empty contexts are `0`.
+- Context document recall is `0.7744`; candidate recall at the same context size is
+  `0.7692`, a `+0.0052` gap. Top-50 candidate recall is `0.8962`, as expected for a context
+  that covers about 10 of 50 chunks.
+- Mean context tokens are `3970.1`; mean utilization is `0.9925`.
+- Retrieval p50/p95 is `8.8 ms` / `13.0 ms`; context build p50/p95 is `0.10 ms` / `0.15 ms`.
+- Full suite: `181 passed, 1 skipped`; Ruff passes.
+- The live context CLI was checked against the production index version
+  `20261115T131732353721Z-f79d12de1fc6`.
 - Holdout set: not used.
 
 ### Block 1 retrospective

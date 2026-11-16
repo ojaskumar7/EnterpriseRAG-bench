@@ -42,7 +42,9 @@ async def test_evaluate_context_reports_recall_mrr_and_budget() -> None:
     metrics = report["metrics"]
 
     assert metrics["candidate_doc_recall"] == 1.0
+    assert metrics["candidate_doc_recall_at_context_size"] == 1.0
     assert metrics["context_doc_recall"] == 1.0
+    assert metrics["recall_gap_at_context_size"] == 0.0
     assert metrics["context_mrr"] == 1.0
     assert metrics["budget_adherence"] == 1.0
     assert metrics["duplicate_chunk_count"] == 0

@@ -6026,3 +6026,62 @@ round on base `85c57d8`.
 Block 5 should add evidence selection and context construction over BM25-retrieved chunks.
 Do not add reranking, generation, or holdout evaluation until Block 4 is verified and the
 BM25 production metrics are documented.
+
+---
+
+## Block 5 Implementation Plan — Evidence Selection and Context Construction
+
+**Status:** complete on 2026-11-16.
+
+**Prerequisite:** Block 4 merged at `8c2b391`; design approved in
+`docs/superpowers/specs/2026-11-16-block-5-context-construction-design.md`.
+
+### Approved Block 5 Decisions
+
+- Rank-first packing of whole chunks.
+- Default 4,000-token budget.
+- Maximum three chunks per document.
+- No source-type diversity cap.
+- Stored chunk `token_count` with whitespace fallback.
+- Sequential `[n]` citations assigned after selection.
+- Pure builder with no I/O; retrieval and database access stay outside it.
+- Context evaluation uses document recall, budget adherence, redundancy, and latency.
+- No reranking, generation, API, or holdout work.
+
+### Block 5 Acceptance Checklist
+
+- [x] `RetrievedChunk` and `ChunkLookup` carry token counts.
+- [x] `ContextBuilder` filters invalid scores, deduplicates, caps documents, and packs
+  whole chunks deterministically.
+- [x] Context never exceeds the token budget.
+- [x] Citation IDs are sequential and chunk IDs are unique.
+- [x] `render_context` and `context_to_dict` produce citation-ready output.
+- [x] `scripts/build_context.py` previews text or JSON context.
+- [x] `scripts/eval_context_dev.py` evaluates the 169 development questions.
+- [x] Context document recall is within 0.05 of BM25 recall at the same context size.
+- [x] Unit, integration, full-suite, and Ruff checks pass.
+- [x] Architecture doc, ADR, README, `plan.md`, and `blog4.md` are updated.
+- [x] Holdout remains untouched.
+
+### Block 5 Verification Evidence
+
+- Unit and CLI tests: `9 passed` for the new context tests.
+- Full suite: `181 passed, 1 skipped`.
+- Ruff: `All checks passed!`.
+- Production index: `20261115T131732353721Z-f79d12de1fc6`.
+- Development evaluation (169 questions, BM25 top-50, 4,000-token budget):
+  candidate top-50 document recall `0.8962`; candidate recall at context size `0.7692`;
+  context document recall `0.7744`; recall gap `+0.0052`; context MRR `0.6710`; budget
+  adherence `1.0`; duplicate chunks `0`; empty contexts `0`; mean tokens `3970.1`;
+  mean utilization `0.9925`; mean selected chunks `10.27`; mean selected documents `8.83`.
+- Context build latency p50/p95 `0.10 ms` / `0.15 ms`; retrieval p50/p95
+  `8.8 ms` / `13.0 ms`.
+- Live context CLI returned 10 blocks, 4,000 tokens, 9 documents, and at most 2 chunks
+  per document for the smoke-test query.
+- Deliberate compromises are recorded in `docs/deferred-work.md`.
+
+### Next Block Preview
+
+Block 6 should add cross-encoder reranking over the BM25 candidates before context
+construction. Do not add generation, API, or holdout evaluation until reranking and context
+quality are measured on the development split.

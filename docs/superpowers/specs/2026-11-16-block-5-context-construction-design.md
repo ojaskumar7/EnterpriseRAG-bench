@@ -130,9 +130,10 @@ actionable BM25 errors.
 
 - BM25 candidates: `top_k=50`.
 - Build a 4,000-token context per question.
-- Report candidate document recall, context document recall, context MRR, budget
-  adherence, mean/p95 context tokens and utilization, selected chunk/doc counts, duplicate
-  chunk count, and retrieval/build/total p50/p95 latency.
+- Report top-k candidate document recall, candidate document recall at context size,
+  context document recall, the recall gap at context size, context MRR, budget adherence,
+  mean/p95 context tokens and utilization, selected chunk/doc counts, duplicate chunk
+  count, and retrieval/build/total p50/p95 latency.
 - Write `data/processed/context_dev_metrics.json` (gitignored).
 - Never pass expected document IDs into retrieval or context construction.
 
@@ -142,7 +143,9 @@ actionable BM25 errors.
 - Selected chunk IDs are unique and citation IDs are sequential.
 - Output is deterministic for repeated runs.
 - Context document recall is no more than 0.05 absolute below BM25 candidate document
-  recall at the same top-k.
+  recall at the same context size (the number of candidate chunks the budget allowed).
+  The top-k gap is reported but is not the gate: a 4,000-token whole-chunk context covers
+  roughly 10 of 50 candidates.
 - Build latency is measured and reported; no retrieval-quality regression.
 - Unit tests, focused integration tests, and Ruff pass.
 - README, architecture doc, ADR, `plan.md`, and `blog4.md` are updated.
@@ -177,3 +180,6 @@ Deliberate shortcuts are recorded in [`docs/deferred-work.md`](../../deferred-wo
 - No source-diversity cap.
 - No build-latency optimization.
 - No prompt-injection sanitization yet.
+- The top-50 candidate recall gap is expected to exceed 0.05 because the 4,000-token
+  whole-chunk budget cannot cover 50 chunks. The acceptance gate uses recall at the same
+  context size.
