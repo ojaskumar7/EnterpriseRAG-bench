@@ -97,7 +97,7 @@ JSON-serializable structure for the CLI/evaluator.
 ## Selection Algorithm
 
 1. Validate settings and query.
-2. Remove candidates with non-positive or non-finite scores.
+2. Remove candidates with non-finite scores. Cross-encoder logits may be negative.
 3. Sort by `(-score, chunk_id)`.
 4. Deduplicate by `chunk_id`, keeping the first occurrence.
 5. For each candidate:

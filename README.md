@@ -6,10 +6,11 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Blocks 1 through 5 are complete. The ingestion pipeline, dense retrieval stack,
-production BM25 retrieval path, and token-budgeted context construction are implemented and
-verified on the real subset. BM25 is the production retriever; dense, PostgreSQL FTS, and
-hybrid RRF remain documented experiments. Reranking and generation move to later blocks.**
+**Blocks 1 through 6 are complete. The ingestion pipeline, dense retrieval stack,
+production BM25 retrieval path, token-budgeted context construction, and optional
+cross-encoder reranking are implemented and verified on the real subset. BM25 is the
+production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain
+documented experiments. Generation moves to a later block.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -27,6 +28,7 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
   atomic publish.
 - Deterministic, citation-ready context construction under a 4,000-token budget with a
   three-chunk-per-document cap.
+- An optional cross-encoder reranker, CLI, and BM25-versus-reranked development evaluator.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -35,11 +37,13 @@ The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The desig
 documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
 [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
 [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md),
-[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md), and
-[`docs/architecture/context-construction.md`](docs/architecture/context-construction.md).
+[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md),
+[`docs/architecture/context-construction.md`](docs/architecture/context-construction.md), and
+[`docs/architecture/reranking.md`](docs/architecture/reranking.md).
 
-Reranking, generation, the full benchmark evaluation harness, authentication, and the API
-are deliberately deferred to later blocks.
+Generation, the full benchmark evaluation harness, authentication, and the API are
+deliberately deferred to later blocks. The MiniLM reranker is available but not adopted
+because it failed its development gate.
 
 ## Problem
 
@@ -196,7 +200,7 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
-Implemented Blocks 1-5 structure:
+Implemented Blocks 1-6 structure:
 
 ```text
 productionRAG/
@@ -227,7 +231,11 @@ productionRAG/
 │   │   │   └── types.py
 │   │   ├── evaluation/
 │   │   │   ├── context.py
-│   │   │   └── dev.py
+│   │   │   ├── dev.py
+│   │   │   └── reranking.py
+│   │   ├── reranking/
+│   │   │   ├── base.py
+│   │   │   └── cross_encoder.py
 │   │   └── retrieval/
 │   │       ├── bm25.py
 │   │       ├── bm25_builder.py
@@ -237,6 +245,7 @@ productionRAG/
 │   │       ├── hybrid.py
 │   │       ├── lexical.py
 │   │       ├── metrics.py
+│   │       ├── reranked.py
 │   │       └── types.py
 │   ├── alembic.ini
 │   ├── alembic/
@@ -257,7 +266,9 @@ productionRAG/
 │   ├── build_bm25_index.py
 │   ├── bm25_search.py
 │   ├── build_context.py
+│   ├── rerank_search.py
 │   ├── eval_retrieval_dev.py
+│   ├── eval_reranking_dev.py
 │   └── eval_context_dev.py
 ├── data/
 │   ├── raw/          # gitignored
@@ -269,13 +280,15 @@ productionRAG/
 │   │   ├── embeddings-and-retrieval.md
 │   │   ├── hybrid-retrieval.md
 │   │   ├── bm25-retrieval.md
-│   │   └── context-construction.md
+│   │   ├── context-construction.md
+│   │   └── reranking.md
 │   └── design-decisions/
 │       ├── 0001-dataset-subset.md
 │       ├── 0002-vector-store-and-embedding-runtime.md
 │       ├── 0003-lexical-backend-and-fusion.md
 │       ├── 0004-bm25-production-backend.md
-│       └── 0005-context-construction.md
+│       ├── 0005-context-construction.md
+│       └── 0006-cross-encoder-reranking.md
 ├── compose.yml
 ├── .env.example
 ├── pyproject.toml
@@ -434,6 +447,23 @@ The context builder deduplicates chunks, allows at most three chunks per documen
 never exceeds the token budget. It uses stored chunk token counts when available. Context
 evaluation does not use the holdout split.
 
+### Block 6 workflow
+
+```bash
+# Preview BM25 top-50 after MiniLM reranking
+uv run python scripts/rerank_search.py "How do I rotate an API key?"   --candidate-k 50 --top-k 50
+
+# Compare BM25 and reranked retrieval on the 169 development questions
+uv run python scripts/eval_reranking_dev.py   --top-k 50 --candidate-k 50   --output data/processed/reranking_dev_metrics_block6.json
+
+# Evaluate context construction over reranked candidates
+uv run python scripts/eval_context_dev.py --reranked   --top-k 50   --output data/processed/context_dev_metrics_block6_reranked.json
+```
+
+The reranker is optional and explicit. It preserves the original BM25 score in
+`retrieval_score`; the context builder keeps finite negative cross-encoder scores. The
+development gate failed, so BM25 remains the production path.
+
 ### Testing
 
 ```bash
@@ -516,6 +546,22 @@ uv run ruff format --check .
 - Full suite: `181 passed, 1 skipped`; Ruff passes.
 - The live context CLI was checked against the production index version
   `20261115T131732353721Z-f79d12de1fc6`.
+- Holdout set: not used.
+
+### Block 6 verification evidence
+
+- `Reranker`, `CrossEncoderReranker`, `RerankedRetriever`, reranking evaluation, query
+  CLI, and `--reranked` context evaluation are implemented.
+- Unit tests cover settings, lazy model loading, score preservation, deterministic
+  tie-breaking, evaluation deltas, CLI output, and finite negative context scores.
+- Full suite: `196 passed, 1 skipped`; Ruff check and format check pass.
+- Real BM25-versus-reranked comparison covers 169 development questions at top-50.
+- The MiniLM reranker failed the gate: MRR `0.6203` vs BM25 `0.6779`, recall@5 `0.6501`
+  vs `0.7310`, and recall@20 `0.8210` vs `0.8560`.
+- Reranked context document recall is `0.7175` vs `0.7744` for BM25, a drop larger than
+  the allowed `0.01`.
+- Budget adherence remains `1.0`; duplicate chunks and empty contexts are `0`.
+- The production index version was `20261115T131732353721Z-f79d12de1fc6`.
 - Holdout set: not used.
 
 ### Block 1 retrospective
@@ -621,6 +667,41 @@ in batch and must be rebuilt after ingestion.
 These are diagnostics, not benchmark claims. The 42-question holdout set remains
 untouched.
 
+## Block 6 measured results
+
+Block 6 added an optional MiniLM cross-encoder over BM25 top-50 and compared both paths on
+the 169 development questions. The reranker did not pass the gate:
+
+| Metric | BM25 | MiniLM reranked | Delta |
+|---|---:|---:|---:|
+| recall@1 | 0.5138 | 0.4403 | -0.0735 |
+| recall@5 | 0.7310 | 0.6501 | -0.0809 |
+| recall@10 | 0.7776 | 0.7377 | -0.0399 |
+| recall@20 | 0.8560 | 0.8210 | -0.0350 |
+| MRR | 0.6779 | 0.6203 | -0.0577 |
+| retrieval p50 | 84.0 ms | 421.8 ms | +337.8 ms |
+| retrieval p95 | 104.4 ms | 661.7 ms | +557.2 ms |
+
+Context comparison at a 4,000-token budget:
+
+| Metric | BM25 context | Reranked context |
+|---|---:|---:|
+| context document recall | 0.7744 | 0.7175 |
+| context MRR | 0.6710 | 0.6121 |
+| budget adherence | 1.0 | 1.0 |
+| mean context tokens | 3970.1 | 3963.1 |
+| empty contexts | 0 | 0 |
+
+`cross-encoder/ms-marco-MiniLM-L-6-v2` lost relevant documents at every cut-off, reduced
+context recall, and increased latency. The model is trained for MS MARCO passage ranking,
+while this corpus mixes enterprise sources and long chunks; no tuning was attempted. BM25
+remains the production retriever, while the optional reranker path stays available for a
+future stronger or domain-tuned model.
+
+The Block 5 context builder was also corrected to accept finite negative cross-encoder
+scores. With the old non-positive filter, 20 reranked contexts were empty; after the fix, every
+development question produced a context.
+
 ## Development Roadmap
 
 | Block | Focus | Status |
@@ -630,7 +711,7 @@ untouched.
 | 3 | PostgreSQL FTS, hybrid retrieval, Reciprocal Rank Fusion | complete |
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
-| 6 | Cross-encoder reranking and retrieval optimization | planned |
+| 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
 | 7 | Gemini integration, citations, and grounded generation | planned |
 | 8 | Evaluation framework and retrieval benchmarking | planned |
 | 9 | Hallucination control, abstention, multi-document reasoning | planned |
@@ -651,8 +732,11 @@ untouched.
 
 ## Known Limitations
 
-- Block 5 stops at token-budgeted context construction. There is no reranker, generated answer, or API yet.
-- BM25 is the production retriever. Dense, PostgreSQL FTS, and hybrid RRF remain documented experiments, not the production path.
+- Block 6 stops at optional reranking and context construction. There is no generated answer or API yet.
+- BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
+- The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
+- Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.
+- The reranker loads model weights on first use, adding startup latency and about 0.34 s p50 per-query latency in the measured run.
 - Hybrid is retained as an experiment; it measured below BM25 on every headline metric and hybrid recall@5 is slightly below dense.
 - BM25 indexes rebuild in batch. Adding, removing, or modifying chunks requires rebuilding the affected tenant/knowledge-base index.
 - No incremental BM25 updates or change-data-capture exist yet; `--check` detects staleness but does not repair it.
@@ -675,15 +759,19 @@ untouched.
 
 ## Documentation
 
-- [`plan.md`](plan.md): detailed Block 1-5 implementation plan.
+- [`plan.md`](plan.md): detailed Block 1-6 implementation plan.
 - [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
 - [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md): embeddings, pgvector schema, loading, dense retrieval, and measured results.
 - [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md): lexical schema, PostgreSQL FTS query flow, RRF fusion, and measured hybrid results.
 - [`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md): production BM25 corpus, versioned index layout, atomic publish, runtime flow, operations, and measured results.
+- [`docs/architecture/context-construction.md`](docs/architecture/context-construction.md): context builder, packing policy, token budgeting, rendering, and measured results.
+- [`docs/architecture/reranking.md`](docs/architecture/reranking.md): optional cross-encoder flow, score contract, commands, measured regression, and decision.
 - [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
 - [`docs/design-decisions/0002-vector-store-and-embedding-runtime.md`](docs/design-decisions/0002-vector-store-and-embedding-runtime.md): pgvector, BGE, PyTorch/CUDA, and dtype decisions.
 - [`docs/design-decisions/0003-lexical-backend-and-fusion.md`](docs/design-decisions/0003-lexical-backend-and-fusion.md): PostgreSQL FTS vs exact BM25, RRF, and measured results.
 - [`docs/design-decisions/0004-bm25-production-backend.md`](docs/design-decisions/0004-bm25-production-backend.md): BM25 productionization, versioned indexes, atomic publish, and measured results.
+- [`docs/design-decisions/0005-context-construction.md`](docs/design-decisions/0005-context-construction.md): context packing, token budget, and measured context quality.
+- [`docs/design-decisions/0006-cross-encoder-reranking.md`](docs/design-decisions/0006-cross-encoder-reranking.md): optional MiniLM reranker, score contract, measured regression, and non-adoption.
 - `docs/evaluation/`: evaluation methodology and results, added later.
 
 ## License and Attribution

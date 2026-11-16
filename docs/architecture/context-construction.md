@@ -24,7 +24,7 @@ query
   -> BM25Retriever (unchanged)
   -> ranked RetrievedChunk list
   -> ContextBuilder
-       -> filter non-positive/non-finite scores
+       -> filter non-finite scores
        -> sort by (-score, chunk_id)
        -> deduplicate by chunk_id
        -> cap at 3 chunks per doc_id

@@ -6085,3 +6085,75 @@ BM25 production metrics are documented.
 Block 6 should add cross-encoder reranking over the BM25 candidates before context
 construction. Do not add generation, API, or holdout evaluation until reranking and context
 quality are measured on the development split.
+
+---
+
+# Block 6 Implementation Plan — Cross-Encoder Reranking
+
+**Status:** complete; MiniLM reranker implemented, measured, and not adopted.
+
+## Goal
+
+Rerank BM25 top-50 candidates with a local cross-encoder before context construction, then
+adopt the reranker only if it improves retrieval and context quality on the development
+split.
+
+## Approved Decisions
+
+- Use `cross-encoder/ms-marco-MiniLM-L-6-v2`; no new dependency.
+- Rerank BM25 top-50 and return top-50.
+- Pair text is `title + "\n" + content`, truncated by the model at 512 tokens.
+- Replace ordering with reranker scores; preserve BM25 in `retrieval_score`.
+- Sort by `(-score, chunk_id)`.
+- Keep the path optional; BM25 remains production unless the gate passes.
+- Keep the holdout untouched; no score blending or fine-tuning.
+
+## Deliverables
+
+- `backend/app/reranking/base.py`, `cross_encoder.py`.
+- `backend/app/retrieval/reranked.py`.
+- `backend/app/evaluation/reranking.py`.
+- `scripts/rerank_search.py`, `eval_reranking_dev.py`.
+- `scripts/eval_context_dev.py --reranked`.
+- Reranker settings in `settings.py` and `.env.example`.
+- Unit tests for settings, model wrapper, decorator, evaluation, and CLI.
+- Architecture doc, ADR, README, deferred-work, and this plan.
+
+## Acceptance Checklist
+
+- [x] Reranker loads lazily, batches pairs, and validates configuration.
+- [x] `RerankedRetriever` preserves original retrieval scores and deterministic ties.
+- [x] Retrieval and context evaluators support reranked candidates.
+- [x] Focused tests, full suite, Ruff check, and Ruff format check pass.
+- [x] Real BM25-versus-reranked evaluation runs on 169 development questions.
+- [x] Context evaluation runs over reranked candidates.
+- [x] Negative finite cross-encoder scores are accepted by the context builder.
+- [x] Gate result is documented; BM25 remains production.
+- [x] Holdout remains untouched.
+
+## Verification Evidence
+
+- Full suite: `196 passed, 1 skipped`.
+- Ruff check and format check pass.
+- BM25 baseline: recall@1 `0.5138`, recall@5 `0.7310`, recall@10 `0.7776`,
+  recall@20 `0.8560`, MRR `0.6779`.
+- MiniLM reranked: recall@1 `0.4403`, recall@5 `0.6501`, recall@10 `0.7377`,
+  recall@20 `0.8210`, MRR `0.6203`.
+- Deltas: recall@1 `-0.0735`, recall@5 `-0.0809`, recall@10 `-0.0399`,
+  recall@20 `-0.0350`, MRR `-0.0577`.
+- Retrieval latency p50/p95: BM25 `84.0/104.4 ms`; reranked `421.8/661.7 ms`.
+- Context document recall: BM25 `0.7744`; reranked `0.7175`.
+- Context MRR: BM25 `0.6710`; reranked `0.6121`.
+- Budget adherence `1.0`; duplicate chunks `0`; empty contexts `0` on both paths.
+- Production index: `20261115T131732353721Z-f79d12de1fc6`.
+
+## Gate Outcome
+
+The reranker failed all improvement conditions and the recall@20 floor. BM25 remains the
+production retriever. The optional path stays in the repository for a stronger or
+domain-tuned model in a later block.
+
+## Next Block Preview
+
+Block 7 should add grounded generation with citations over the selected context, without
+changing the production BM25 path or touching the holdout.

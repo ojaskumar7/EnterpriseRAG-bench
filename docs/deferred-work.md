@@ -29,3 +29,21 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
 - **CLI success path is manually verified.** The live-index context CLI JSON contract was
   checked against the production index, but there is no automated test that requires the
   full index and database. Unit tests cover builder behavior and CLI validation.
+
+## Block 6: Cross-Encoder Reranking
+
+- **MiniLM is not adopted.** `cross-encoder/ms-marco-MiniLM-L-6-v2` reduced every retrieval
+  cut-off, MRR, and context document recall on the development split. BM25 remains the
+  production path. Try `BAAI/bge-reranker-base`, a domain-tuned model, or different
+  truncation/pair formatting in a later block.
+- **No score blending.** Reranker scores replace BM25 ordering outright. Normalized
+  blending or RRF was deferred because the first model failed and blending would invite
+  tuning against the development split.
+- **No reranker caching or batching across questions.** Each query scores its own top-50
+  candidates. First-call model loading and per-query latency were measured but not
+  optimized.
+- **No automated live-model test.** Unit tests use fake predictors and rerankers. The real
+  MiniLM run is manual because it requires model weights, GPU, the production index, and
+  PostgreSQL.
+- **Pair truncation is fixed at 512 tokens.** Title plus content can exceed the model
+  limit; a later reranker comparison should measure passage truncation explicitly.
