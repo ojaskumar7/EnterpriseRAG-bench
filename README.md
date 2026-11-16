@@ -37,6 +37,7 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
   structured claims, and exposes provider-identified conflicts.
 - An initial FastAPI query API with JWT bearer authentication and token-scoped
   tenant/knowledge-base access.
+- An in-process ingestion job runner with scoped job status and explicit lifecycle states.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -518,6 +519,9 @@ uv run uvicorn app.api.main:app --app-dir backend --reload
 The API exposes unauthenticated `GET /health` and authenticated `POST /query`. JWT claims
 control tenant and knowledge-base scope; request data cannot widen that scope.
 
+Block 11 also exposes authenticated ingestion job submission/status contracts. Only
+server-registered source names are accepted; arbitrary client filesystem paths are rejected.
+
 ### Testing
 
 ```bash
@@ -770,7 +774,7 @@ development question produced a context.
 | 8 | Evaluation framework and retrieval benchmarking | complete (live full evaluation deferred) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | in progress |
-| 11 | Asynchronous ingestion and document lifecycle | planned |
+| 11 | Asynchronous ingestion and document lifecycle | in progress |
 | 12 | Observability, frontend, Docker, and deployment | planned |
 
 ## Engineering Principles

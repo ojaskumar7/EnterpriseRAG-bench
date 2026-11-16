@@ -96,3 +96,12 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   answer.
 - **No refresh or revocation lists.** JWT expiry is validated, but token revocation and
   session management require an identity service.
+
+## Block 11: Ingestion Lifecycle
+
+- **In-process jobs only.** The first runner uses asyncio tasks and threads; Redis/Celery,
+  durable job persistence, retries, and distributed workers are deferred.
+- **Registered sources only.** The API does not accept arbitrary filesystem paths or uploads
+  yet. Object storage and source adapters need their own trust and validation boundaries.
+- **No implicit deletion.** Content-addressed document identity is preserved; tombstones,
+  version precedence, and lifecycle migrations remain future work.

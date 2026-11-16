@@ -33,3 +33,10 @@ fields without requiring PostgreSQL or Gemini.
 
 External identity providers, refresh tokens, user registration, rate limiting, and
 production secret rotation remain deferred.
+
+## Ingestion jobs
+
+Block 11 adds authenticated `POST /ingestion/jobs` and `GET /ingestion/jobs/{job_id}`
+contracts. The first implementation accepts only server-registered source names and tracks
+`queued`, `running`, `succeeded`, and `failed` states. Job status is tenant-scoped and
+unknown or unauthorized jobs return `404`.

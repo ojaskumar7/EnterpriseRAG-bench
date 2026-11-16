@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -7,9 +8,11 @@ import httpx
 import jwt
 
 from app.api.app import create_app
+from app.api.ingestion import IngestionJobService
 from app.api.service import QueryService
 from app.generation.safety import GroundingPolicy
 from app.generation.types import GeneratedAnswer, GenerationRequest
+from app.ingestion.jobs import InProcessIngestionRunner
 from app.retrieval.types import RetrievedChunk
 from app.settings import Settings
 
@@ -44,7 +47,7 @@ class FakeGenerator:
         )
 
 
-def build_app():
+def build_app(ingestion_service: IngestionJobService | None = None):
     settings = Settings(_env_file=None, jwt_secret=JWT_TEST_SECRET)
 
     def factory(tenant_id, knowledge_base_id):
@@ -53,7 +56,7 @@ def build_app():
         return FakeRetriever()
 
     service = QueryService(factory, FakeGenerator(), GroundingPolicy())
-    return create_app(service, settings)
+    return create_app(service, settings, ingestion_service)
 
 
 def token(*, expires_delta: timedelta = timedelta(minutes=5)) -> str:
@@ -151,3 +154,52 @@ async def test_query_rejects_blank_question() -> None:
         )
 
     assert response.status_code == 422
+
+
+async def test_ingestion_job_is_scoped_and_reports_completion() -> None:
+    runner = InProcessIngestionRunner()
+
+    async def ingest() -> dict[str, int]:
+        return {"documents_processed": 1, "chunks_written": 2}
+
+    ingestion = IngestionJobService(
+        runner,
+        {"fixture": ingest},
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=build_app(ingestion)),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/ingestion/jobs",
+            headers={"Authorization": f"Bearer {token()}"},
+            json={"source_name": "fixture", "knowledge_base_id": str(KNOWLEDGE_BASE_ID)},
+        )
+        assert response.status_code == 202
+        job_id = response.json()["job_id"]
+        for _ in range(100):
+            status_response = await client.get(
+                f"/ingestion/jobs/{job_id}",
+                headers={"Authorization": f"Bearer {token()}"},
+            )
+            if status_response.json()["status"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+    await runner.wait_for_idle()
+
+    assert status_response.json()["documents_processed"] == 1
+
+
+async def test_ingestion_unknown_source_is_unavailable() -> None:
+    ingestion = IngestionJobService(InProcessIngestionRunner(), {})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=build_app(ingestion)),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/ingestion/jobs",
+            headers={"Authorization": f"Bearer {token()}"},
+            json={"source_name": "missing", "knowledge_base_id": str(KNOWLEDGE_BASE_ID)},
+        )
+
+    assert response.status_code == 503
