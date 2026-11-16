@@ -35,6 +35,8 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
   validity, abstention, document recall, token usage, and latency summaries.
 - A first grounding-safety layer that applies deterministic evidence gates, validates
   structured claims, and exposes provider-identified conflicts.
+- An initial FastAPI query API with JWT bearer authentication and token-scoped
+  tenant/knowledge-base access.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -506,6 +508,16 @@ Grounding safety is applied automatically by the generation and development-eval
 CLIs. Citationless answers become deterministic abstentions; provider-identified evidence
 conflicts are surfaced instead of silently resolved.
 
+### Block 10 workflow
+
+```bash
+# Set a long local JWT secret in .env before starting the API
+uv run uvicorn app.api.main:app --app-dir backend --reload
+```
+
+The API exposes unauthenticated `GET /health` and authenticated `POST /query`. JWT claims
+control tenant and knowledge-base scope; request data cannot widen that scope.
+
 ### Testing
 
 ```bash
@@ -757,7 +769,7 @@ development question produced a context.
 | 7 | Gemini integration, citations, and grounded generation | complete (live full evaluation deferred) |
 | 8 | Evaluation framework and retrieval benchmarking | complete (live full evaluation deferred) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
-| 10 | FastAPI, authentication, and multi-tenancy | planned |
+| 10 | FastAPI, authentication, and multi-tenancy | in progress |
 | 11 | Asynchronous ingestion and document lifecycle | planned |
 | 12 | Observability, frontend, Docker, and deployment | planned |
 
@@ -779,6 +791,8 @@ development question produced a context.
 - Blocks 7–9 provide the generation, deterministic evaluation, and grounding-safety
   foundation. Full live evaluation and semantic faithfulness judging remain deferred.
 - Block 9 does not infer source authority or resolve document-version conflicts automatically.
+- Block 10 has the initial API/auth boundary; external identity providers, refresh tokens,
+  rate limiting, and production secret rotation are still deferred.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
 - Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.

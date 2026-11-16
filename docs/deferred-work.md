@@ -85,3 +85,12 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   unsupported claims; paraphrase-aware entailment and an LLM judge remain future work.
 - **Block 9 is deterministic by design.** It is complete as a structural safety boundary;
   semantic faithfulness and source-authority resolution are future work.
+
+## Block 10: API and Authentication
+
+- **Local JWT only.** The first API uses an HS256 secret from `.env`; external identity
+  providers, refresh tokens, and user management are deferred.
+- **No operational controls yet.** Rate limiting, request quotas, audit logging, and
+  production secret rotation belong to the deployment block.
+- **No streaming.** The query response is synchronous and returns the completed grounded
+  answer.
