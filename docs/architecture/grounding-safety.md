@@ -1,6 +1,6 @@
 # Grounding Safety Architecture
 
-- Status: first safety slice implemented
+- Status: implemented, deterministic safety boundary
 - Scope: deterministic abstention, structured claims, and conflict metadata
 
 ## Flow
@@ -31,12 +31,17 @@ cited passages. Claims with no meaningful overlap cause abstention; mixed result
 a `partial` answer containing only supported claims. This is an auditable heuristic, not a
 semantic entailment model.
 
+Thresholds are configurable through `GROUNDING_MIN_CITATIONS`,
+`GROUNDING_MIN_DOCUMENTS`, and `GROUNDING_MIN_CLAIM_OVERLAP`. The same policy is used by
+the answer CLI and the dataset evaluator.
+
 Saved generation reports include the resulting grounding decisions, mean claim count, and
 provider-reported conflict count. Legacy records without a decision are labeled `legacy`
 instead of being silently reclassified.
 
 ## Limits
 
-This layer validates structure and evidence references. It does not prove that a cited
-claim is semantically entailed by its passage, rank source authority, or resolve document
-versions. Those require a later fact-level evaluator and conflict-precedence design.
+This block validates structure and evidence references, supports partial answers, and
+surfaces provider-reported conflicts. It does not prove that a cited claim is semantically
+entailed by its passage, rank source authority, or resolve document versions. Those require
+a later fact-level evaluator and conflict-precedence design.

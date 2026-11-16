@@ -754,9 +754,9 @@ development question produced a context.
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
-| 7 | Gemini integration, citations, and grounded generation | in progress |
-| 8 | Evaluation framework and retrieval benchmarking | in progress |
-| 9 | Hallucination control, abstention, multi-document reasoning | in progress |
+| 7 | Gemini integration, citations, and grounded generation | complete (live full evaluation deferred) |
+| 8 | Evaluation framework and retrieval benchmarking | complete (live full evaluation deferred) |
+| 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | planned |
 | 11 | Asynchronous ingestion and document lifecycle | planned |
 | 12 | Observability, frontend, Docker, and deployment | planned |
@@ -774,11 +774,11 @@ development question produced a context.
 
 ## Known Limitations
 
-- Block 6 stops at optional reranking and context construction. There is no generated answer or API yet.
-- Block 7 generation is implemented, but live Gemini evaluation and answer-quality metrics are pending.
-- Block 8 has deterministic offline reporting; the full live generation evaluation remains pending.
-- Block 9 validates evidence references and exposes conflicts, but semantic faithfulness
-  and source-authority resolution are still pending.
+- Blocks 7–9 add grounded generation, offline evaluation, and deterministic grounding
+  safety. The API and authentication layer are still planned.
+- Blocks 7–9 provide the generation, deterministic evaluation, and grounding-safety
+  foundation. Full live evaluation and semantic faithfulness judging remain deferred.
+- Block 9 does not infer source authority or resolve document-version conflicts automatically.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
 - Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.

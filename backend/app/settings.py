@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     gemini_temperature: float = Field(default=0.0, ge=0, le=2)
     gemini_max_output_tokens: int = Field(default=1024, gt=0)
     gemini_max_retries: int = Field(default=2, ge=0, le=5)
+    grounding_min_citations: int = Field(default=1, gt=0)
+    grounding_min_documents: int = Field(default=1, gt=0)
+    grounding_min_claim_overlap: float = Field(default=0.2, ge=0, le=1)
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 

@@ -115,3 +115,11 @@ def test_gemini_settings_defaults() -> None:
     assert settings.gemini_temperature == 0.0
     assert settings.gemini_max_output_tokens == 1024
     assert settings.gemini_max_retries == 2
+
+
+def test_grounding_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.grounding_min_citations == 1
+    assert settings.grounding_min_documents == 1
+    assert settings.grounding_min_claim_overlap == 0.2

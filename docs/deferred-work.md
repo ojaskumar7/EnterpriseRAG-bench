@@ -83,3 +83,5 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   and `conflict` decisions, but these labels do not establish factual correctness.
 - **Claim overlap is lexical.** The first claim verifier uses token overlap to catch obvious
   unsupported claims; paraphrase-aware entailment and an LLM judge remain future work.
+- **Block 9 is deterministic by design.** It is complete as a structural safety boundary;
+  semantic faithfulness and source-authority resolution are future work.

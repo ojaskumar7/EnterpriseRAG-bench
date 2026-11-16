@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 from app.context import ContextBuilder  # noqa: E402
 from app.db.session import build_engine, build_session_factory  # noqa: E402
 from app.generation.gemini import GeminiGenerator  # noqa: E402
-from app.generation.safety import apply_grounding_policy  # noqa: E402
+from app.generation.safety import GroundingPolicy, apply_grounding_policy  # noqa: E402
 from app.generation.types import GenerationError, GenerationRequest  # noqa: E402
 from app.retrieval.bm25 import BM25Retriever  # noqa: E402
 from app.retrieval.bm25_index import BM25IndexError, BM25IndexManager  # noqa: E402
@@ -74,7 +74,15 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
     generated = GeminiGenerator(settings, model=args.model).generate(
         GenerationRequest(query=args.query, context=context)
     )
-    grounding = apply_grounding_policy(generated, context)
+    grounding = apply_grounding_policy(
+        generated,
+        context,
+        policy=GroundingPolicy(
+            min_citations=settings.grounding_min_citations,
+            min_documents=settings.grounding_min_documents,
+            min_claim_overlap=settings.grounding_min_claim_overlap,
+        ),
+    )
     payload = {
         "answer": asdict(grounding.answer),
         "grounding": {
