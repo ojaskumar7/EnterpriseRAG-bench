@@ -67,6 +67,7 @@ class ChunkLookup:
     source_type: str
     title: str
     chunk_index: int
+    token_count: int
     content: str
     content_hash: str
     doc_metadata: dict[str, Any]
@@ -277,6 +278,7 @@ async def get_chunks_by_ids(
         ChunkRecord.source_type,
         ChunkRecord.title,
         ChunkRecord.chunk_index,
+        ChunkRecord.token_count,
         ChunkRecord.content,
         ChunkRecord.content_hash,
         ChunkRecord.doc_metadata,
@@ -295,6 +297,7 @@ async def get_chunks_by_ids(
             source_type=row.source_type,
             title=row.title,
             chunk_index=row.chunk_index,
+            token_count=row.token_count,
             content=row.content,
             content_hash=row.content_hash,
             doc_metadata=row.doc_metadata,

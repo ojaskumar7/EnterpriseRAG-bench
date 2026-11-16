@@ -18,3 +18,4 @@ class RetrievedChunk:
     content: str
     score: float
     metadata: dict[str, Any]
+    token_count: int | None = None

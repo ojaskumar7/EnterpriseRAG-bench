@@ -135,6 +135,7 @@ class BM25Retriever:
                 content=row.content,
                 score=score,
                 metadata=row.doc_metadata,
+                token_count=getattr(row, "token_count", None),
             )
             for entry, score in selected
             for row in [by_id[entry.chunk_id]]
