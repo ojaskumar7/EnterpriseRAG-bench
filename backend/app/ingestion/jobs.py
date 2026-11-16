@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.observability import log_event
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 TerminalStatus = frozenset({"succeeded", "failed"})
@@ -103,6 +106,14 @@ class InProcessIngestionRunner:
         task = asyncio.create_task(self._run(job.job_id, operation))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        log_event(
+            logging.INFO,
+            "ingestion_job_queued",
+            job_id=str(job.job_id),
+            tenant_id=str(tenant_id),
+            knowledge_base_id=str(knowledge_base_id),
+            source_name=source_name,
+        )
         return job
 
     async def _run(self, job_id: uuid.UUID, operation: Operation) -> None:
@@ -119,6 +130,7 @@ class InProcessIngestionRunner:
                 completed_at=_now(),
                 error=f"{type(exc).__name__}: {exc}",
             )
+            log_event(logging.ERROR, "ingestion_job_failed", job_id=str(job_id))
             return
 
         payload = _result_payload(result)
@@ -129,6 +141,13 @@ class InProcessIngestionRunner:
             documents_processed=int(payload.get("documents_processed", 0)),
             chunks_written=int(payload.get("chunks_written", 0)),
             result=payload,
+        )
+        log_event(
+            logging.INFO,
+            "ingestion_job_succeeded",
+            job_id=str(job_id),
+            documents_processed=int(payload.get("documents_processed", 0)),
+            chunks_written=int(payload.get("chunks_written", 0)),
         )
 
     async def wait_for_idle(self) -> None:

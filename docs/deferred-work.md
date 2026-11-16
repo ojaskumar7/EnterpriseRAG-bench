@@ -105,3 +105,12 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   yet. Object storage and source adapters need their own trust and validation boundaries.
 - **No implicit deletion.** Content-addressed document identity is preserved; tombstones,
   version precedence, and lifecycle migrations remain future work.
+
+## Block 12: Observability
+
+- **Logs only for now.** Metrics export, tracing, dashboards, retention, and alerting are
+  deferred until the runtime/deployment slice.
+- **No frontend yet.** The API is observable but there is no user-facing operations view.
+- **Local container runtime only.** The API image and Compose database wiring are present,
+  but BM25 artifact mounts, image hardening, registry publishing, and production deployment
+  are deferred.

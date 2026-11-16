@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -16,6 +18,7 @@ from app.api.ingestion import (
 from app.api.schemas import QueryRequest, QueryResponse
 from app.api.service import QueryService
 from app.generation.types import GenerationError
+from app.observability import REQUEST_ID, elapsed_ms, log_event, new_request_id
 from app.retrieval.bm25_index import BM25IndexError
 from app.settings import Settings, get_settings
 
@@ -31,6 +34,36 @@ def create_app(
     app.state.settings = settings or get_settings()
     app.state.query_service = service
     app.state.ingestion_service = ingestion_service
+
+    @app.middleware("http")
+    async def request_logging(request: Request, call_next):
+        request_id = new_request_id(request.headers.get("x-request-id"))
+        token = REQUEST_ID.set(request_id)
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            log_event(
+                logging.ERROR,
+                "http_request_failed",
+                method=request.method,
+                route=request.url.path,
+                latency_ms=elapsed_ms(started),
+            )
+            raise
+        else:
+            response.headers["X-Request-ID"] = request_id
+            log_event(
+                logging.INFO,
+                "http_request_completed",
+                method=request.method,
+                route=request.url.path,
+                status_code=response.status_code,
+                latency_ms=elapsed_ms(started),
+            )
+            return response
+        finally:
+            REQUEST_ID.reset(token)
 
     @app.exception_handler(GenerationError)
     async def generation_error_handler(

@@ -9,11 +9,13 @@ from app.api.service import QueryService
 from app.db.session import build_engine, build_session_factory
 from app.generation.gemini import GeminiGenerator
 from app.generation.safety import GroundingPolicy
+from app.observability import configure_logging
 from app.retrieval.bm25 import BM25Retriever
 from app.retrieval.bm25_index import BM25IndexManager
 from app.settings import get_settings
 
 settings = get_settings()
+configure_logging(settings.log_level, settings.json_logs)
 engine = build_engine(settings)
 
 

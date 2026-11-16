@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     grounding_min_claim_overlap: float = Field(default=0.2, ge=0, le=1)
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
+    log_level: str = "INFO"
+    json_logs: bool = False
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 

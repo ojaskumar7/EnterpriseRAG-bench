@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Sequence
 from typing import Protocol
@@ -12,6 +13,7 @@ from app.api.schemas import QueryRequest, QueryResponse
 from app.context.builder import ContextBuilder
 from app.generation.safety import GroundingPolicy, apply_grounding_policy
 from app.generation.types import GeneratedAnswer, GenerationRequest
+from app.observability import elapsed_ms, log_event
 from app.retrieval.types import RetrievedChunk
 
 
@@ -63,7 +65,16 @@ class QueryService:
             context,
             policy=self.grounding_policy,
         )
-        latency_ms = (time.perf_counter() - started) * 1000.0
+        latency_ms = elapsed_ms(started)
+        log_event(
+            logging.INFO,
+            "grounded_query_completed",
+            tenant_id=str(principal.tenant_id),
+            knowledge_base_id=str(request.knowledge_base_id),
+            grounding_decision=grounding.decision,
+            citation_count=len(grounding.answer.citation_ids),
+            latency_ms=latency_ms,
+        )
         sources = [
             {
                 "citation_id": block.citation_id,
@@ -81,5 +92,5 @@ class QueryService:
             grounding_decision=grounding.decision,
             grounding_reason=grounding.reason,
             sources=sources,
-            latency_ms=round(latency_ms, 2),
+            latency_ms=latency_ms,
         )

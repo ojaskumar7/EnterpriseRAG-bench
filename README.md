@@ -38,6 +38,8 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - An initial FastAPI query API with JWT bearer authentication and token-scoped
   tenant/knowledge-base access.
 - An in-process ingestion job runner with scoped job status and explicit lifecycle states.
+- A safe observability foundation with request IDs, structured API/job events, and latency
+  fields that reject sensitive log payloads.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -522,6 +524,19 @@ control tenant and knowledge-base scope; request data cannot widen that scope.
 Block 11 also exposes authenticated ingestion job submission/status contracts. Only
 server-registered source names are accepted; arbitrary client filesystem paths are rejected.
 
+Block 12 currently adds request correlation and structured logs. Set `JSON_LOGS=true` for
+machine-readable output; logs never include prompts, answers, retrieved content, tokens, or
+API keys.
+
+The first container runtime slice adds a locked Python API image and Compose wiring:
+
+```bash
+docker compose up --build
+curl http://localhost:8000/health
+```
+
+Secrets remain in the local `.env`; dataset and BM25 artifacts are excluded from the image.
+
 ### Testing
 
 ```bash
@@ -775,7 +790,7 @@ development question produced a context.
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | in progress |
 | 11 | Asynchronous ingestion and document lifecycle | in progress |
-| 12 | Observability, frontend, Docker, and deployment | planned |
+| 12 | Observability, frontend, Docker, and deployment | in progress |
 
 ## Engineering Principles
 

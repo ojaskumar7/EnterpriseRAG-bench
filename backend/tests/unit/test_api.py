@@ -79,10 +79,11 @@ async def test_health_does_not_require_authentication() -> None:
         transport=httpx.ASGITransport(app=build_app()),
         base_url="http://test",
     ) as client:
-        response = await client.get("/health")
+        response = await client.get("/health", headers={"X-Request-ID": "request-123"})
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert response.headers["X-Request-ID"] == "request-123"
 
 
 async def test_query_requires_bearer_token() -> None:
