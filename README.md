@@ -31,6 +31,8 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - An optional cross-encoder reranker, CLI, and BM25-versus-reranked development evaluator.
 - A provider-independent grounded generation boundary with Gemini configuration, prompt
   construction, citation validation, and a generation preview CLI.
+- An offline evaluation report layer for saved generation results, including citation
+  validity, abstention, document recall, token usage, and latency summaries.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -484,6 +486,18 @@ Generation uses BM25 and the existing context builder. Empty context produces a 
 insufficient-evidence response without calling Gemini. Do not place API keys in source
 files, command history, or committed documentation.
 
+### Block 8 workflow
+
+```bash
+# Summarize a saved generation run without making new Gemini calls
+uv run python scripts/report_generation_eval.py \
+  --input data/processed/generation_dev.jsonl
+```
+
+The report writes ignored JSON and Markdown metrics. It rejects holdout inputs and uses
+gold document IDs only during post-generation scoring. LLM-judge answer correctness and
+faithfulness remain deferred.
+
 ### Testing
 
 ```bash
@@ -733,7 +747,7 @@ development question produced a context.
 | 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
 | 7 | Gemini integration, citations, and grounded generation | in progress |
-| 8 | Evaluation framework and retrieval benchmarking | planned |
+| 8 | Evaluation framework and retrieval benchmarking | in progress |
 | 9 | Hallucination control, abstention, multi-document reasoning | planned |
 | 10 | FastAPI, authentication, and multi-tenancy | planned |
 | 11 | Asynchronous ingestion and document lifecycle | planned |
@@ -754,6 +768,7 @@ development question produced a context.
 
 - Block 6 stops at optional reranking and context construction. There is no generated answer or API yet.
 - Block 7 generation is implemented, but live Gemini evaluation and answer-quality metrics are pending.
+- Block 8 has deterministic offline reporting; the full live generation evaluation remains pending.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
 - Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.

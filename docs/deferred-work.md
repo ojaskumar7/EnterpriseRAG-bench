@@ -61,3 +61,12 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   the API and workload are defined.
 - **Model availability can change.** The default is pinned to the current stable Gemini
   model, but `GEMINI_MODEL` remains configurable for future migrations.
+
+## Block 8: Offline Evaluation
+
+- **The first report is deterministic only.** It measures citation structure, document
+  recall, abstention, tokens, and latency; it does not judge answer correctness.
+- **The full live generation run is deferred.** The five-question sample is useful for
+  smoke diagnostics, but 169 Gemini calls require an explicit quota and capacity decision.
+- **No LLM judge yet.** Faithfulness, answer-fact coverage, and unsupported-claim scoring
+  require a later labeled or judge-backed evaluation design.
