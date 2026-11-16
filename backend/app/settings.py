@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     reranker_batch_size: int = Field(default=32, gt=0)
     reranker_max_length: int = Field(default=512, gt=0)
     reranker_candidate_k: int = Field(default=50, gt=0)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_temperature: float = Field(default=0.0, ge=0, le=2)
+    gemini_max_output_tokens: int = Field(default=1024, gt=0)
+    gemini_max_retries: int = Field(default=2, ge=0, le=5)
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 

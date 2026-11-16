@@ -47,3 +47,17 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   PostgreSQL.
 - **Pair truncation is fixed at 512 tokens.** Title plus content can exceed the model
   limit; a later reranker comparison should measure passage truncation explicitly.
+
+## Block 7: Grounded Generation
+
+- **No live benchmark yet.** The Gemini provider and local contracts are implemented, but
+  live development evaluation is manual and requires credentials and model access.
+- **No calibrated abstention.** Empty context has a deterministic fallback, but confidence
+  thresholds and unsupported-claim detection are deferred to the abstention block.
+- **No faithfulness metrics.** Citation presence is structurally validated; citation
+  correctness, answer-fact coverage, and hallucination rates require a later evaluator.
+- **No streaming or caching.** The provider retries a small number of temporary capacity
+  failures, but streaming, caching, and broader operational controls are deferred until
+  the API and workload are defined.
+- **Model availability can change.** The default is pinned to the current stable Gemini
+  model, but `GEMINI_MODEL` remains configurable for future migrations.

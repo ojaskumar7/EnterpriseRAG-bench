@@ -29,6 +29,8 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
 - Deterministic, citation-ready context construction under a 4,000-token budget with a
   three-chunk-per-document cap.
 - An optional cross-encoder reranker, CLI, and BM25-versus-reranked development evaluator.
+- A provider-independent grounded generation boundary with Gemini configuration, prompt
+  construction, citation validation, and a generation preview CLI.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -42,8 +44,9 @@ documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md)
 [`docs/architecture/reranking.md`](docs/architecture/reranking.md).
 
 Generation, the full benchmark evaluation harness, authentication, and the API are
-deliberately deferred to later blocks. The MiniLM reranker is available but not adopted
-because it failed its development gate.
+deliberately deferred to later blocks. Block 7 now provides the generation boundary and
+Gemini provider; calibrated abstention and answer-quality evaluation remain deferred.
+The MiniLM reranker is available but not adopted because it failed its development gate.
 
 ## Problem
 
@@ -464,6 +467,23 @@ The reranker is optional and explicit. It preserves the original BM25 score in
 `retrieval_score`; the context builder keeps finite negative cross-encoder scores. The
 development gate failed, so BM25 remains the production path.
 
+### Block 7 workflow
+
+```bash
+# Add GEMINI_API_KEY to the local, gitignored .env first
+uv run python scripts/generate_answer.py "How do I rotate an API key?"
+
+# Inspect the structured answer and citation IDs
+uv run python scripts/generate_answer.py "How do I rotate an API key?" --json
+
+# Run one real development question without launching the full split
+uv run python scripts/eval_generation_dev.py --question-id qst_0013
+```
+
+Generation uses BM25 and the existing context builder. Empty context produces a local
+insufficient-evidence response without calling Gemini. Do not place API keys in source
+files, command history, or committed documentation.
+
 ### Testing
 
 ```bash
@@ -712,7 +732,7 @@ development question produced a context.
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
-| 7 | Gemini integration, citations, and grounded generation | planned |
+| 7 | Gemini integration, citations, and grounded generation | in progress |
 | 8 | Evaluation framework and retrieval benchmarking | planned |
 | 9 | Hallucination control, abstention, multi-document reasoning | planned |
 | 10 | FastAPI, authentication, and multi-tenancy | planned |
@@ -733,6 +753,7 @@ development question produced a context.
 ## Known Limitations
 
 - Block 6 stops at optional reranking and context construction. There is no generated answer or API yet.
+- Block 7 generation is implemented, but live Gemini evaluation and answer-quality metrics are pending.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
 - Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.

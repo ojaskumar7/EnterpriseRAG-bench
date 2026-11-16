@@ -106,3 +106,12 @@ def test_reranker_settings_defaults() -> None:
     assert settings.reranker_batch_size == 32
     assert settings.reranker_max_length == 512
     assert settings.reranker_candidate_k == 50
+
+
+def test_gemini_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.gemini_model == "gemini-3.8-flash"
+    assert settings.gemini_temperature == 0.0
+    assert settings.gemini_max_output_tokens == 1024
+    assert settings.gemini_max_retries == 2

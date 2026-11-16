@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.4",
     "bm25s>=0.3.16",
     "pystemmer>=3.1.0",
+    "google-genai>=1.0.0",
 ]
 
 [dependency-groups]
