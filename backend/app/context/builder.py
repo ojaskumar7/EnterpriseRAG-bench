@@ -56,7 +56,7 @@ class ContextBuilder:
             (
                 candidate
                 for candidate in candidates
-                if isfinite(candidate.score) and candidate.score > 0
+                if isfinite(candidate.score)
             ),
             key=lambda candidate: (-candidate.score, candidate.chunk_id),
         )

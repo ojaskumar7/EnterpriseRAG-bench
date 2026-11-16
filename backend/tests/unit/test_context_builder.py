@@ -106,3 +106,9 @@ def test_render_and_dict_include_citations() -> None:
     assert "alpha beta" in rendered
     assert payload["token_count"] == 2
     assert payload["blocks"][0]["chunk_id"] == "a"
+
+
+def test_builder_keeps_finite_negative_scores() -> None:
+    context = ContextBuilder(token_budget=10).build("q", [chunk("a", score=-0.5)])
+
+    assert [block.chunk_id for block in context.blocks] == ["a"]
