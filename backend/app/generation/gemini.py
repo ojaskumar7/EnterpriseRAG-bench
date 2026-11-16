@@ -8,6 +8,8 @@ from typing import Any
 
 from app.generation.prompt import build_generation_prompt
 from app.generation.types import (
+    Claim,
+    Conflict,
     GeneratedAnswer,
     GenerationError,
     GenerationRequest,
@@ -66,6 +68,8 @@ class GeminiGenerator:
                 prompt_tokens=_usage_value(usage, "prompt_token_count"),
                 completion_tokens=_usage_value(usage, "candidates_token_count"),
                 insufficient_evidence=bool(payload.get("insufficient_evidence", False)),
+                claims=tuple(_claims(payload.get("claims", []))),
+                conflicts=tuple(_conflicts(payload.get("conflicts", []))),
             )
             return validate_answer(answer, request.context)
         except GenerationError:
@@ -117,6 +121,40 @@ def _citation_ids(value: Any) -> list[int]:
     if any(not isinstance(item, int) for item in value):
         raise GenerationError("Gemini response citation_ids must be a list of integers")
     return value
+
+
+def _claims(value: Any) -> list[Claim]:
+    if not isinstance(value, list):
+        raise GenerationError("Gemini response claims must be a list")
+    claims = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            raise GenerationError("Gemini response claims must contain text and citation_ids")
+        claims.append(
+            Claim(
+                text=item["text"],
+                citation_ids=tuple(_citation_ids(item.get("citation_ids", []))),
+            )
+        )
+    return claims
+
+
+def _conflicts(value: Any) -> list[Conflict]:
+    if not isinstance(value, list):
+        raise GenerationError("Gemini response conflicts must be a list")
+    conflicts = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("description"), str):
+            raise GenerationError(
+                "Gemini response conflicts must contain description and citation_ids"
+            )
+        conflicts.append(
+            Conflict(
+                description=item["description"],
+                citation_ids=tuple(_citation_ids(item.get("citation_ids", []))),
+            )
+        )
+    return conflicts
 
 
 def _usage_value(usage: Any, field: str) -> int | None:

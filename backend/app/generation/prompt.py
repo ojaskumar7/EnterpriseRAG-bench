@@ -22,9 +22,13 @@ contained inside the evidence. If the evidence does not support an answer, say t
 available evidence is insufficient and do not invent facts.
 
 Return JSON with exactly these fields:
-{{"answer": "string", "citation_ids": [1, 2], "insufficient_evidence": false}}
+{{"answer": "string", "citation_ids": [1, 2], "insufficient_evidence": false,
+"claims": [{{"text": "claim", "citation_ids": [1]}}],
+"conflicts": [{{"description": "sources disagree", "citation_ids": [1, 2]}}]}}
 
 Every factual claim should be supported by one or more citation IDs from the evidence.
+List the important factual claims separately in claims. If sources disagree, describe the
+disagreement in conflicts instead of silently choosing one source.
 Use an empty citation_ids list only when the answer says the evidence is insufficient.
 
 <question>

@@ -19,15 +19,26 @@ def summarize_generation(records: Sequence[Mapping[str, Any]]) -> dict[str, obje
     latencies: list[float] = []
     context_tokens: list[float] = []
     citation_counts: list[float] = []
+    claim_counts: list[float] = []
     citation_presence = 0
     valid_citations = 0
     abstentions = 0
+    conflicts = 0
+    decisions: Counter[str] = Counter()
     recall_values: list[float] = []
 
     for record in records:
         answer = _mapping(record, "answer")
         context = _mapping(record, "context")
         citation_ids = _citation_ids(answer.get("citation_ids"))
+        claims = answer.get("claims", [])
+        if not isinstance(claims, list):
+            raise ValueError("answer.claims must be a list")
+        claim_counts.append(float(len(claims)))
+        conflict_records = answer.get("conflicts", [])
+        if not isinstance(conflict_records, list):
+            raise ValueError("answer.conflicts must be a list")
+        conflicts += len(conflict_records)
         citation_count = _non_negative_int(context, "citation_count")
         expected_doc_ids = _string_list(record, "expected_doc_ids")
         selected_doc_ids = set(_string_list(context, "selected_doc_ids"))
@@ -45,6 +56,11 @@ def summarize_generation(records: Sequence[Mapping[str, Any]]) -> dict[str, obje
         citation_presence += bool(citation_ids)
         valid_citations += all(1 <= citation_id <= citation_count for citation_id in citation_ids)
         abstentions += bool(answer.get("insufficient_evidence", False))
+        grounding = record.get("grounding")
+        if isinstance(grounding, Mapping) and isinstance(grounding.get("decision"), str):
+            decisions[grounding["decision"]] += 1
+        else:
+            decisions["legacy"] += 1
         if expected_doc_ids:
             recall_values.append(
                 sum(doc_id in selected_doc_ids for doc_id in expected_doc_ids)
@@ -55,6 +71,7 @@ def summarize_generation(records: Sequence[Mapping[str, Any]]) -> dict[str, obje
     return {
         "question_count": count,
         "models": dict(sorted(models.items())),
+        "grounding_decisions": dict(sorted(decisions.items())),
         "citation_presence_rate": citation_presence / count,
         "citation_validity_rate": valid_citations / count,
         "abstention_count": abstentions,
@@ -64,6 +81,8 @@ def summarize_generation(records: Sequence[Mapping[str, Any]]) -> dict[str, obje
         ),
         "mean_context_tokens": sum(context_tokens) / count,
         "mean_citation_count": sum(citation_counts) / count,
+        "mean_claim_count": sum(claim_counts) / count,
+        "conflict_count": conflicts,
         "latency_ms": latency_summary(latencies),
     }
 
@@ -78,12 +97,17 @@ def render_generation_markdown(summary: Mapping[str, object]) -> str:
     if not isinstance(models, Mapping):
         raise ValueError("summary.models must be a mapping")
     model_text = ", ".join(f"`{name}`: {count}" for name, count in models.items())
+    decisions = summary["grounding_decisions"]
+    if not isinstance(decisions, Mapping):
+        raise ValueError("summary.grounding_decisions must be a mapping")
+    decision_text = ", ".join(f"`{name}`: {count}" for name, count in decisions.items())
     return "\n".join(
         [
             "# Generation Evaluation Report",
             "",
             f"- Questions: {summary['question_count']}",
             f"- Models: {model_text}",
+            f"- Grounding decisions: {decision_text}",
             f"- Citation presence rate: {float(summary['citation_presence_rate']):.4f}",
             f"- Citation validity rate: {float(summary['citation_validity_rate']):.4f}",
             f"- Abstentions: {summary['abstention_count']} "
@@ -92,6 +116,8 @@ def render_generation_markdown(summary: Mapping[str, object]) -> str:
             f"{float(summary['selected_context_doc_recall']):.4f}",
             f"- Mean context tokens: {float(summary['mean_context_tokens']):.1f}",
             f"- Mean citations: {float(summary['mean_citation_count']):.1f}",
+            f"- Mean claims: {float(summary['mean_claim_count']):.1f}",
+            f"- Provider-reported conflicts: {summary['conflict_count']}",
             f"- Latency p50/p95/max: {float(latency['p50_ms']):.1f}/"
             f"{float(latency['p95_ms']):.1f}/{float(latency['max_ms']):.1f} ms",
             "",

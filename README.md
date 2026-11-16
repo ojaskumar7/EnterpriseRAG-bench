@@ -33,6 +33,8 @@ The approved plan is in [`plan.md`](plan.md). The project currently provides:
   construction, citation validation, and a generation preview CLI.
 - An offline evaluation report layer for saved generation results, including citation
   validity, abstention, document recall, token usage, and latency summaries.
+- A first grounding-safety layer that applies deterministic evidence gates, validates
+  structured claims, and exposes provider-identified conflicts.
 - A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
 - A context evaluator for recall, budget adherence, redundancy, and latency.
 - Unit, integration, and real-subset tests.
@@ -498,6 +500,12 @@ The report writes ignored JSON and Markdown metrics. It rejects holdout inputs a
 gold document IDs only during post-generation scoring. LLM-judge answer correctness and
 faithfulness remain deferred.
 
+### Block 9 workflow
+
+Grounding safety is applied automatically by the generation and development-evaluation
+CLIs. Citationless answers become deterministic abstentions; provider-identified evidence
+conflicts are surfaced instead of silently resolved.
+
 ### Testing
 
 ```bash
@@ -748,7 +756,7 @@ development question produced a context.
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
 | 7 | Gemini integration, citations, and grounded generation | in progress |
 | 8 | Evaluation framework and retrieval benchmarking | in progress |
-| 9 | Hallucination control, abstention, multi-document reasoning | planned |
+| 9 | Hallucination control, abstention, multi-document reasoning | in progress |
 | 10 | FastAPI, authentication, and multi-tenancy | planned |
 | 11 | Asynchronous ingestion and document lifecycle | planned |
 | 12 | Observability, frontend, Docker, and deployment | planned |
@@ -769,6 +777,8 @@ development question produced a context.
 - Block 6 stops at optional reranking and context construction. There is no generated answer or API yet.
 - Block 7 generation is implemented, but live Gemini evaluation and answer-quality metrics are pending.
 - Block 8 has deterministic offline reporting; the full live generation evaluation remains pending.
+- Block 9 validates evidence references and exposes conflicts, but semantic faithfulness
+  and source-authority resolution are still pending.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
 - Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.

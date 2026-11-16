@@ -70,3 +70,16 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   smoke diagnostics, but 169 Gemini calls require an explicit quota and capacity decision.
 - **No LLM judge yet.** Faithfulness, answer-fact coverage, and unsupported-claim scoring
   require a later labeled or judge-backed evaluation design.
+
+## Block 9: Grounding Safety
+
+- **Structural, not semantic, validation.** Citation IDs and claim structure are checked,
+  but the system does not prove that a passage entails each claim.
+- **Provider-reported conflicts only.** The first version surfaces conflicts Gemini marks;
+  it does not independently infer disagreement or choose source authority.
+- **No version precedence.** Temporal document updates and authoritative-source ranking need
+  metadata and a separate policy design.
+- **Report decisions are structural.** Grounding reports now count `grounded`, `abstain`,
+  and `conflict` decisions, but these labels do not establish factual correctness.
+- **Claim overlap is lexical.** The first claim verifier uses token overlap to catch obvious
+  unsupported claims; paraphrase-aware entailment and an LLM judge remain future work.
