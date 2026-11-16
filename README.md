@@ -629,7 +629,7 @@ untouched.
 | 2 | Embeddings, PostgreSQL, pgvector, dense retrieval | complete |
 | 3 | PostgreSQL FTS, hybrid retrieval, Reciprocal Rank Fusion | complete |
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
-| 5 | Evidence selection and context construction | planned |
+| 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | planned |
 | 7 | Gemini integration, citations, and grounded generation | planned |
 | 8 | Evaluation framework and retrieval benchmarking | planned |
@@ -651,7 +651,7 @@ untouched.
 
 ## Known Limitations
 
-- Block 4 stops at BM25 retrieval. There is no reranker, evidence selection, context construction, or generated answer yet.
+- Block 5 stops at token-budgeted context construction. There is no reranker, generated answer, or API yet.
 - BM25 is the production retriever. Dense, PostgreSQL FTS, and hybrid RRF remain documented experiments, not the production path.
 - Hybrid is retained as an experiment; it measured below BM25 on every headline metric and hybrid recall@5 is slightly below dense.
 - BM25 indexes rebuild in batch. Adding, removing, or modifying chunks requires rebuilding the affected tenant/knowledge-base index.
@@ -675,7 +675,7 @@ untouched.
 
 ## Documentation
 
-- [`plan.md`](plan.md): detailed Block 1-4 implementation plan.
+- [`plan.md`](plan.md): detailed Block 1-5 implementation plan.
 - [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md): pipeline, loaders, normalization, chunking, and measured statistics.
 - [`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md): embeddings, pgvector schema, loading, dense retrieval, and measured results.
 - [`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md): lexical schema, PostgreSQL FTS query flow, RRF fusion, and measured hybrid results.
