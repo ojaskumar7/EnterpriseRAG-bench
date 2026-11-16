@@ -77,3 +77,18 @@ def test_empty_corpus_is_rejected(tmp_path: Path) -> None:
         assert "no chunks" in str(exc).lower()
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_non_finite_k1_is_rejected(tmp_path: Path) -> None:
+    try:
+        build_bm25_index(
+            corpus=_corpus(),
+            index_root=tmp_path,
+            tenant_id="tenant",
+            knowledge_base_id="kb",
+            k1=float("nan"),
+        )
+    except ValueError as exc:
+        assert "k1" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")

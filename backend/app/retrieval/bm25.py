@@ -72,6 +72,8 @@ class BM25Retriever:
                 if score > 0.0
                 and (allowed is None or snapshot.catalog[index].source_type in allowed)
             ]
+            if len(indices) < candidate_k:
+                break
             if len(selected) >= top_k or candidate_k >= snapshot.row_count:
                 break
             next_k = min(snapshot.row_count, candidate_k * 2)

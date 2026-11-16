@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import math
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -165,9 +166,9 @@ def build_bm25_index(
     chunks = tuple(sorted(corpus.chunks, key=lambda chunk: chunk.chunk_id))
     if not chunks:
         raise ValueError(f"no chunks found for tenant {tenant_id} and KB {knowledge_base_id}")
-    if k1 <= 0:
-        raise ValueError("k1 must be positive")
-    if not 0 <= b <= 1:
+    if not math.isfinite(k1) or k1 <= 0:
+        raise ValueError("k1 must be positive and finite")
+    if not math.isfinite(b) or not 0 <= b <= 1:
         raise ValueError("b must be between 0 and 1")
 
     fingerprint = corpus_fingerprint(

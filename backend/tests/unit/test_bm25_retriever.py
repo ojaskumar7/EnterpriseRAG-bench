@@ -83,6 +83,17 @@ class ZeroScoreSnapshot(FakeSnapshot):
         return indices, [0.0 for _ in indices]
 
 
+class PartialSnapshot(FakeSnapshot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_calls = 0
+
+    def search(self, tokens: Sequence[str], k: int) -> tuple[list[int], list[float]]:
+        del tokens, k
+        self.search_calls += 1
+        return [0, 1, 2], [2.0, 1.5, 1.0]
+
+
 class FakeChunk:
     def __init__(self, chunk_id: str, source_type: str) -> None:
         index = int(chunk_id.rsplit("-", 1)[1])
@@ -228,3 +239,30 @@ async def test_retriever_returns_empty_for_blank_query() -> None:
     )
 
     assert await retriever.retrieve("   ", top_k=2) == []
+
+
+async def test_retriever_stops_when_positive_hits_are_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = PartialSnapshot()
+
+    async def fake_get_chunks_by_ids(
+        session: object,
+        chunk_ids: Sequence[str],
+        **kwargs: object,
+    ) -> list[FakeChunk]:
+        del session, kwargs
+        return [FakeChunk(chunk_id, "html") for chunk_id in chunk_ids]
+
+    monkeypatch.setattr("app.retrieval.bm25.get_chunks_by_ids", fake_get_chunks_by_ids)
+    retriever = BM25Retriever(
+        FakeManager(snapshot),
+        _session_factory,
+        tenant_id=uuid.uuid4(),
+        knowledge_base_id=uuid.uuid4(),
+    )
+
+    results = await retriever.retrieve("needle", top_k=10)
+
+    assert [result.chunk_id for result in results] == ["chunk-0", "chunk-1", "chunk-2"]
+    assert snapshot.search_calls == 1
