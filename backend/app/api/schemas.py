@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class QueryRequest(BaseModel):
@@ -14,6 +14,14 @@ class QueryRequest(BaseModel):
     token_budget: int = Field(default=4000, gt=0, le=32_000)
     max_chunks_per_doc: int = Field(default=3, gt=0, le=20)
     source_types: list[str] | None = None
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("question must not be blank")
+        return normalized
 
 
 class CitationSource(BaseModel):

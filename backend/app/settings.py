@@ -85,6 +85,13 @@ class Settings(BaseSettings):
             raise ValueError("reranker_device must be one of: auto, cpu, cuda")
         return normalized
 
+    @field_validator("jwt_secret")
+    @classmethod
+    def validate_jwt_secret(cls, value: str | None) -> str | None:
+        if value is not None and value and len(value) < 32:
+            raise ValueError("jwt_secret must be at least 32 characters when configured")
+        return value
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

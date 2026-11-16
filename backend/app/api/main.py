@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from app.api.app import create_app
 from app.api.service import QueryService
 from app.db.session import build_engine, build_session_factory
@@ -34,3 +36,12 @@ service = QueryService(
     ),
 )
 app = create_app(service, settings)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    await engine.dispose()
+
+
+app.router.lifespan_context = lifespan

@@ -123,3 +123,8 @@ def test_grounding_settings_defaults() -> None:
     assert settings.grounding_min_citations == 1
     assert settings.grounding_min_documents == 1
     assert settings.grounding_min_claim_overlap == 0.2
+
+
+def test_short_jwt_secret_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, jwt_secret="too-short")

@@ -94,3 +94,5 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   production secret rotation belong to the deployment block.
 - **No streaming.** The query response is synchronous and returns the completed grounded
   answer.
+- **No refresh or revocation lists.** JWT expiry is validated, but token revocation and
+  session management require an identity service.

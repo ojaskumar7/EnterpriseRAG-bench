@@ -137,3 +137,17 @@ async def test_query_rejects_expired_token() -> None:
         )
 
     assert response.status_code == 401
+
+
+async def test_query_rejects_blank_question() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=build_app()),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/query",
+            headers={"Authorization": f"Bearer {token()}"},
+            json={"question": "   ", "knowledge_base_id": str(KNOWLEDGE_BASE_ID)},
+        )
+
+    assert response.status_code == 422

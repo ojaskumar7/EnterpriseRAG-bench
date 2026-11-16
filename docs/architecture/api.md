@@ -21,6 +21,10 @@ token and passed to the retriever; caller input cannot override it.
 `JWT_SECRET` and `JWT_ALGORITHM` are loaded from `.env`. Tokens, API keys, and retrieved
 content are not logged by the API layer.
 
+Configured JWT secrets must be at least 32 characters. Blank questions are rejected at the
+request schema boundary. Generation failures map to `502`, stale/missing BM25 index errors
+map to `503`, and the production engine is disposed during application shutdown.
+
 ## Testing
 
 API tests use `httpx` ASGI transport with fake retriever/generator implementations. They
