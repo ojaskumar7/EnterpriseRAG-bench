@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     bm25_k1: float = Field(default=1.5, gt=0)
     bm25_b: float = Field(default=0.75, ge=0, le=1)
     bm25_retention: int = Field(default=2, ge=1)
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_device: str = "auto"
+    reranker_batch_size: int = Field(default=32, gt=0)
+    reranker_max_length: int = Field(default=512, gt=0)
+    reranker_candidate_k: int = Field(default=50, gt=0)
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 
@@ -60,6 +65,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"auto", "cpu", "cuda"}:
             raise ValueError("embedding_device must be one of: auto, cpu, cuda")
+        return normalized
+
+    @field_validator("reranker_device")
+    @classmethod
+    def validate_reranker_device(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"auto", "cpu", "cuda"}:
+            raise ValueError("reranker_device must be one of: auto, cpu, cuda")
         return normalized
 
 

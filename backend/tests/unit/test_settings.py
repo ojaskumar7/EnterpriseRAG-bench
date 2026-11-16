@@ -73,6 +73,9 @@ def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
         ("EMBEDDING_DTYPE", "bfloat16"),
         ("EMBEDDING_DIMENSION", "0"),
         ("EMBEDDING_BATCH_SIZE", "0"),
+        ("RERANKER_DEVICE", "mps"),
+        ("RERANKER_BATCH_SIZE", "0"),
+        ("RERANKER_MAX_LENGTH", "0"),
     ],
 )
 def test_invalid_values(
@@ -93,3 +96,13 @@ def test_bm25_settings_defaults() -> None:
     assert settings.bm25_k1 == 1.5
     assert settings.bm25_b == 0.75
     assert settings.bm25_retention == 2
+
+
+def test_reranker_settings_defaults() -> None:
+    settings = Settings()
+
+    assert settings.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    assert settings.reranker_device == "auto"
+    assert settings.reranker_batch_size == 32
+    assert settings.reranker_max_length == 512
+    assert settings.reranker_candidate_k == 50
