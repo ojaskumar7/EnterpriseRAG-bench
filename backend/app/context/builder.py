@@ -53,11 +53,7 @@ class ContextBuilder:
             )
 
         ranked = sorted(
-            (
-                candidate
-                for candidate in candidates
-                if isfinite(candidate.score)
-            ),
+            (candidate for candidate in candidates if isfinite(candidate.score)),
             key=lambda candidate: (-candidate.score, candidate.chunk_id),
         )
         seen_chunk_ids: set[str] = set()

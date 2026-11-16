@@ -28,9 +28,7 @@ class CrossEncoderReranker:
         if requested_device not in {"auto", "cpu", "cuda"}:
             raise ValueError("device must be one of: auto, cpu, cuda")
         self.device = requested_device
-        self.batch_size = (
-            settings.reranker_batch_size if batch_size is None else batch_size
-        )
+        self.batch_size = settings.reranker_batch_size if batch_size is None else batch_size
         self.max_length = settings.reranker_max_length if max_length is None else max_length
         if self.batch_size <= 0:
             raise ValueError("batch_size must be positive")
