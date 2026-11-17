@@ -4,62 +4,6 @@ A production-oriented RAG platform for searching and reasoning over enterprise k
 
 This project is being built incrementally as an engineering learning project. The focus is on retrieval quality, evaluation, reliability, and backend architecture rather than hiding the system behind a high-level RAG framework.
 
-## Current Status
-
-**Blocks 1 through 12 are complete. The ingestion pipeline, dense retrieval stack,
-production BM25 retrieval path, token-budgeted context construction, optional
-cross-encoder reranking, grounded Gemini generation with grounding-safety checks, offline
-generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
-observability, and the local operator frontend are implemented and verified on the real
-subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
-reranking remain documented experiments. The live generation evaluation is complete on
-both the 169-question development split and the 42-question holdout; production
-deployment is the remaining work.**
-
-The approved plan is in [`plan.md`](plan.md). The project currently provides:
-
-- Reproducible dataset subset acquisition and manifest generation.
-- Zip and parquet document loaders.
-- Deterministic normalization with content hashing.
-- Token-aware chunking with metadata and BGE tokenization.
-- A validated corpus of 34,378 documents and 136,383 chunks.
-- BGE embeddings loaded into PostgreSQL with pgvector.
-- An idempotent embedding/load pipeline and an HNSW cosine index.
-- Dense retrieval with a leakage-safe interface and development recall/MRR metrics.
-- PostgreSQL full-text lexical retrieval with a generated `search_vector` and GIN index.
-- Hybrid retrieval with Reciprocal Rank Fusion (RRF) over dense and lexical candidates.
-- Production BM25 retrieval with versioned, per-tenant/per-knowledge-base indexes and
-  atomic publish.
-- Deterministic, citation-ready context construction under a 4,000-token budget with a
-  three-chunk-per-document cap.
-- An optional cross-encoder reranker, CLI, and BM25-versus-reranked development evaluator.
-- A provider-independent grounded generation boundary with Gemini configuration, prompt
-  construction, citation validation, and a generation preview CLI.
-- An offline evaluation report layer for saved generation results, including citation
-  validity, abstention, document recall, token usage, and latency summaries.
-- A first grounding-safety layer that applies deterministic evidence gates, validates
-  structured claims, and exposes provider-identified conflicts.
-- An initial FastAPI query API with JWT bearer authentication and token-scoped
-  tenant/knowledge-base access.
-- An in-process ingestion job runner with scoped job status and explicit lifecycle states.
-- A safe observability foundation with request IDs, structured API/job events, and latency
-  fields that reject sensitive log payloads.
-- A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
-- A context evaluator for recall, budget adherence, redundancy, and latency.
-- Unit, integration, and real-subset tests.
-
-The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
-documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
-[`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
-[`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md),
-[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md),
-[`docs/architecture/context-construction.md`](docs/architecture/context-construction.md), and
-[`docs/architecture/reranking.md`](docs/architecture/reranking.md).
-
-Generation, the full benchmark evaluation harness, authentication, and the API are
-deliberately deferred to later blocks. Block 7 now provides the generation boundary and
-Gemini provider; calibrated abstention and answer-quality evaluation remain deferred.
-The MiniLM reranker is available but not adopted because it failed its development gate.
 
 ## Problem
 
@@ -871,6 +815,64 @@ citation structure and document recall. Semantic faithfulness judging remains fu
 - Tenant isolation is enforced in code and database queries, not only in the UI.
 - External services are kept behind clean interfaces.
 - Dependencies are introduced only when they solve a concrete problem.
+
+## Current Status
+
+**Blocks 1 through 12 are complete. The ingestion pipeline, dense retrieval stack,
+production BM25 retrieval path, token-budgeted context construction, optional
+cross-encoder reranking, grounded Gemini generation with grounding-safety checks, offline
+generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
+observability, and the local operator frontend are implemented and verified on the real
+subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
+reranking remain documented experiments. The live generation evaluation is complete on
+both the 169-question development split and the 42-question holdout; production
+deployment is the remaining work.**
+
+The approved plan is in [`plan.md`](plan.md). The project currently provides:
+
+- Reproducible dataset subset acquisition and manifest generation.
+- Zip and parquet document loaders.
+- Deterministic normalization with content hashing.
+- Token-aware chunking with metadata and BGE tokenization.
+- A validated corpus of 34,378 documents and 136,383 chunks.
+- BGE embeddings loaded into PostgreSQL with pgvector.
+- An idempotent embedding/load pipeline and an HNSW cosine index.
+- Dense retrieval with a leakage-safe interface and development recall/MRR metrics.
+- PostgreSQL full-text lexical retrieval with a generated `search_vector` and GIN index.
+- Hybrid retrieval with Reciprocal Rank Fusion (RRF) over dense and lexical candidates.
+- Production BM25 retrieval with versioned, per-tenant/per-knowledge-base indexes and
+  atomic publish.
+- Deterministic, citation-ready context construction under a 4,000-token budget with a
+  three-chunk-per-document cap.
+- An optional cross-encoder reranker, CLI, and BM25-versus-reranked development evaluator.
+- A provider-independent grounded generation boundary with Gemini configuration, prompt
+  construction, citation validation, and a generation preview CLI.
+- An offline evaluation report layer for saved generation results, including citation
+  validity, abstention, document recall, token usage, and latency summaries.
+- A first grounding-safety layer that applies deterministic evidence gates, validates
+  structured claims, and exposes provider-identified conflicts.
+- An initial FastAPI query API with JWT bearer authentication and token-scoped
+  tenant/knowledge-base access.
+- An in-process ingestion job runner with scoped job status and explicit lifecycle states.
+- A safe observability foundation with request IDs, structured API/job events, and latency
+  fields that reject sensitive log payloads.
+- A unified development evaluator for dense, lexical, hybrid, and BM25 modes.
+- A context evaluator for recall, budget adherence, redundancy, and latency.
+- Unit, integration, and real-subset tests.
+
+The generated corpus is in `data/processed/chunks.jsonl` (gitignored). The designs are
+documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md),
+[`docs/architecture/embeddings-and-retrieval.md`](docs/architecture/embeddings-and-retrieval.md),
+[`docs/architecture/hybrid-retrieval.md`](docs/architecture/hybrid-retrieval.md),
+[`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md),
+[`docs/architecture/context-construction.md`](docs/architecture/context-construction.md), and
+[`docs/architecture/reranking.md`](docs/architecture/reranking.md).
+
+Generation, the full benchmark evaluation harness, authentication, and the API are
+deliberately deferred to later blocks. Block 7 now provides the generation boundary and
+Gemini provider; calibrated abstention and answer-quality evaluation remain deferred.
+The MiniLM reranker is available but not adopted because it failed its development gate.
+
 
 ## Known Limitations
 
