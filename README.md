@@ -6,11 +6,14 @@ This project is being built incrementally as an engineering learning project. Th
 
 ## Current Status
 
-**Blocks 1 through 6 are complete. The ingestion pipeline, dense retrieval stack,
-production BM25 retrieval path, token-budgeted context construction, and optional
-cross-encoder reranking are implemented and verified on the real subset. BM25 is the
-production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain
-documented experiments. Generation moves to a later block.**
+**Blocks 1 through 12 are complete. The ingestion pipeline, dense retrieval stack,
+production BM25 retrieval path, token-budgeted context construction, optional
+cross-encoder reranking, grounded Gemini generation with grounding-safety checks, offline
+generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
+observability, and the local operator frontend are implemented and verified on the real
+subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
+reranking remain documented experiments. The live full-split generation evaluation,
+holdout benchmark reporting, and production deployment are the remaining work.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -802,9 +805,9 @@ development question produced a context.
 | 7 | Gemini integration, citations, and grounded generation | complete (live full evaluation deferred) |
 | 8 | Evaluation framework and retrieval benchmarking | complete (live full evaluation deferred) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
-| 10 | FastAPI, authentication, and multi-tenancy | in progress |
-| 11 | Asynchronous ingestion and document lifecycle | in progress |
-| 12 | Observability, frontend, Docker, and deployment | in progress |
+| 10 | FastAPI, authentication, and multi-tenancy | complete (external identity and operational controls deferred) |
+| 11 | Asynchronous ingestion and document lifecycle | complete (durable job workers deferred) |
+| 12 | Observability, frontend, Docker, and deployment | complete (production deployment deferred) |
 
 ## Engineering Principles
 
@@ -820,7 +823,8 @@ development question produced a context.
 ## Known Limitations
 
 - Blocks 7–9 add grounded generation, offline evaluation, and deterministic grounding
-  safety. The API and authentication layer are still planned.
+  safety. Generation is live and provider-backed; it is not yet benchmark-validated on the
+  full development split.
 - Blocks 7–9 provide the generation, deterministic evaluation, and grounding-safety
   foundation. Full live evaluation and semantic faithfulness judging remain deferred.
 - Block 9 does not infer source authority or resolve document-version conflicts automatically.
@@ -859,13 +863,21 @@ development question produced a context.
 - [`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md): production BM25 corpus, versioned index layout, atomic publish, runtime flow, operations, and measured results.
 - [`docs/architecture/context-construction.md`](docs/architecture/context-construction.md): context builder, packing policy, token budgeting, rendering, and measured results.
 - [`docs/architecture/reranking.md`](docs/architecture/reranking.md): optional cross-encoder flow, score contract, commands, measured regression, and decision.
+- [`docs/architecture/generation.md`](docs/architecture/generation.md): grounded generation boundary, Gemini configuration, prompt construction, and citation validation.
+- [`docs/architecture/evaluation.md`](docs/architecture/evaluation.md): offline generation report methodology and measured summaries.
+- [`docs/architecture/grounding-safety.md`](docs/architecture/grounding-safety.md): evidence gates, structured claim checks, and conflict surfacing.
+- [`docs/architecture/api.md`](docs/architecture/api.md): query API, JWT bearer authentication, tenant scoping, and request boundaries.
+- [`docs/architecture/runtime.md`](docs/architecture/runtime.md): async ingestion lifecycle, job states, and runtime packaging.
+- [`docs/architecture/observability.md`](docs/architecture/observability.md): request correlation, structured events, and sensitive-field logging guards.
+- [`docs/architecture/frontend.md`](docs/architecture/frontend.md): local operator UI, browser contract, and CORS configuration.
 - [`docs/design-decisions/0001-dataset-subset.md`](docs/design-decisions/0001-dataset-subset.md): dataset, split, chunking, and data-quality decisions.
 - [`docs/design-decisions/0002-vector-store-and-embedding-runtime.md`](docs/design-decisions/0002-vector-store-and-embedding-runtime.md): pgvector, BGE, PyTorch/CUDA, and dtype decisions.
 - [`docs/design-decisions/0003-lexical-backend-and-fusion.md`](docs/design-decisions/0003-lexical-backend-and-fusion.md): PostgreSQL FTS vs exact BM25, RRF, and measured results.
 - [`docs/design-decisions/0004-bm25-production-backend.md`](docs/design-decisions/0004-bm25-production-backend.md): BM25 productionization, versioned indexes, atomic publish, and measured results.
 - [`docs/design-decisions/0005-context-construction.md`](docs/design-decisions/0005-context-construction.md): context packing, token budget, and measured context quality.
 - [`docs/design-decisions/0006-cross-encoder-reranking.md`](docs/design-decisions/0006-cross-encoder-reranking.md): optional MiniLM reranker, score contract, measured regression, and non-adoption.
-- `docs/evaluation/`: evaluation methodology and results, added later.
+- [`docs/evaluation/lexical-benchmark.md`](docs/evaluation/lexical-benchmark.md): Block 3.5 lexical benchmark methodology and measured results.
+- [`docs/architecture/evaluation.md`](docs/architecture/evaluation.md): Block 8 offline generation report methodology.
 
 ## License and Attribution
 
