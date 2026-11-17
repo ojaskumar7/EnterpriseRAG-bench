@@ -71,3 +71,7 @@ class HybridRetriever:
             weights=[self.dense_weight, self.lexical_weight],
         )
         return fused[:top_k]
+
+
+class Bm25DenseRetriever(HybridRetriever):
+    """Fuse the production BM25 retriever with dense retrieval through RRF."""

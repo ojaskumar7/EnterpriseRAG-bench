@@ -32,15 +32,16 @@ class FakeSentenceTransformer:
 
 def _provider(**overrides: object) -> tuple[BGEEmbeddingProvider, FakeSentenceTransformer]:
     model = FakeSentenceTransformer("fake/model", "cpu")
-    provider = BGEEmbeddingProvider(
-        model_name="fake/model",
-        dimension=4,
-        device="cpu",
-        batch_size=8,
-        query_instruction="QUERY: ",
-        model=model,
-        **overrides,
-    )
+    settings = {
+        "model_name": "fake/model",
+        "dimension": 4,
+        "device": "cpu",
+        "batch_size": 8,
+        "query_instruction": "QUERY: ",
+        "model": model,
+    }
+    settings.update(overrides)
+    provider = BGEEmbeddingProvider(**settings)
     return provider, model
 
 
@@ -65,6 +66,15 @@ def test_query_gets_instruction() -> None:
     assert len(vector) == 4
     texts, _ = model.calls[0]
     assert texts == ["QUERY: rotate a key"]
+
+
+def test_empty_query_instruction_is_supported() -> None:
+    provider, model = _provider(query_instruction="")
+
+    provider.embed_query("rotate a key")
+
+    texts, _ = model.calls[0]
+    assert texts == ["rotate a key"]
 
 
 def test_empty_document_batch_does_not_load_model() -> None:

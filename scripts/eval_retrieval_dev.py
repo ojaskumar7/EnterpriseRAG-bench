@@ -25,11 +25,11 @@ from app.evaluation.dev import (  # noqa: E402
 from app.retrieval.bm25 import BM25Retriever  # noqa: E402
 from app.retrieval.bm25_index import BM25IndexManager  # noqa: E402
 from app.retrieval.dense import DenseRetriever  # noqa: E402
-from app.retrieval.hybrid import HybridRetriever  # noqa: E402
+from app.retrieval.hybrid import Bm25DenseRetriever, HybridRetriever  # noqa: E402
 from app.retrieval.lexical import LexicalRetriever  # noqa: E402
 from app.settings import Settings, get_settings  # noqa: E402
 
-MODES = ("dense", "lexical", "hybrid", "bm25")
+MODES = ("dense", "lexical", "hybrid", "bm25", "bm25_dense")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +46,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--latency-top-k", type=int, default=50)
     parser.add_argument("--candidate-k", type=int, default=50)
     parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument(
+        "--index-root",
+        type=Path,
+        default=settings.bm25_index_root,
+        help="Published BM25 index root.",
+    )
+    parser.add_argument(
+        "--query-instruction",
+        default=settings.embedding_query_instruction,
+        help="Instruction prepended to dense queries; empty disables it.",
+    )
     parser.add_argument("--dense-weight", type=float, default=1.0)
     parser.add_argument("--lexical-weight", type=float, default=1.0)
     parser.add_argument("--limit", type=int, default=None)
@@ -81,14 +92,18 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
         raise ValueError("no development questions found")
 
     provider = None
-    if args.mode in {"dense", "hybrid", "all"}:
+    if args.mode in {"dense", "hybrid", "bm25_dense", "all"}:
         provider = BGEEmbeddingProvider(
             model_name=args.model,
             dimension=settings.embedding_dimension,
             device=args.device,
             batch_size=settings.embedding_batch_size,
             dtype=args.dtype,
-            query_instruction=settings.embedding_query_instruction,
+            query_instruction=getattr(
+                args,
+                "query_instruction",
+                settings.embedding_query_instruction,
+            ),
         )
 
     engine = build_engine(settings)
@@ -109,7 +124,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
             )
 
         bm25 = BM25Retriever(
-            BM25IndexManager(settings.bm25_index_root),
+            BM25IndexManager(getattr(args, "index_root", settings.bm25_index_root)),
             session_factory,
             tenant_id=args.tenant_id,
             knowledge_base_id=args.knowledge_base_id,
@@ -120,6 +135,14 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
             retriever_by_mode["hybrid"] = HybridRetriever(
                 dense,
                 lexical,
+                rrf_k=args.rrf_k,
+                dense_weight=args.dense_weight,
+                lexical_weight=args.lexical_weight,
+                candidate_k=args.candidate_k,
+            )
+            retriever_by_mode["bm25_dense"] = Bm25DenseRetriever(
+                dense,
+                bm25,
                 rrf_k=args.rrf_k,
                 dense_weight=args.dense_weight,
                 lexical_weight=args.lexical_weight,

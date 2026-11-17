@@ -22,6 +22,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "EMBEDDING_DEVICE",
         "EMBEDDING_DTYPE",
         "EMBEDDING_BATCH_SIZE",
+        "EMBEDDING_QUERY_INSTRUCTION",
         "DEFAULT_TENANT_ID",
         "DEFAULT_KNOWLEDGE_BASE_ID",
     ):
@@ -47,6 +48,7 @@ def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EMBEDDING_DEVICE", "CUDA")
     monkeypatch.setenv("EMBEDDING_DTYPE", "FLOAT16")
     monkeypatch.setenv("EMBEDDING_BATCH_SIZE", "8")
+    monkeypatch.setenv("EMBEDDING_QUERY_INSTRUCTION", "")
     monkeypatch.setenv("DEFAULT_TENANT_ID", "11111111-1111-1111-1111-111111111111")
     monkeypatch.setenv(
         "DEFAULT_KNOWLEDGE_BASE_ID",
@@ -61,6 +63,7 @@ def test_environment_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.embedding_device == "cuda"
     assert settings.embedding_dtype == "float16"
     assert settings.embedding_batch_size == 8
+    assert settings.embedding_query_instruction == ""
     assert str(settings.default_tenant_id) == "11111111-1111-1111-1111-111111111111"
     assert str(settings.default_knowledge_base_id) == "22222222-2222-2222-2222-222222222222"
 

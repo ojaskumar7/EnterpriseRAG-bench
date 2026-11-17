@@ -48,6 +48,19 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
 - **Pair truncation is fixed at 512 tokens.** Title plus content can exceed the model
   limit; a later reranker comparison should measure passage truncation explicitly.
 
+## Retrieval quality audit
+
+- **BM25+dense RRF was not adopted.** The best tested configuration (`rrf_k=10`,
+  `candidate_k=50`) reached MRR `0.6245` and recall@20 `0.8230`, below exact BM25
+  at MRR `0.6779` and recall@20 `0.8560`.
+- **BGE reranking remains experimental.** `BAAI/bge-reranker-base` improved retrieval
+  and context recall, but its context recall changed by `+0.0355`, outside the
+  required `0.01` gate. It is recorded as a candidate for a separately approved
+  production experiment, not enabled in generation.
+- **Title+content dense re-embedding is deferred.** The five-question sanity check
+  supports the title/content asymmetry but is not conclusive enough to spend the
+  GPU budget on a new corpus embedding. Revisit only with explicit approval.
+
 ## Block 7: Grounded Generation
 
 - **No live benchmark yet.** The Gemini provider and local contracts are implemented, but

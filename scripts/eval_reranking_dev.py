@@ -34,7 +34,7 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     )
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--candidate-k", type=int, default=50)
-    parser.add_argument("--model", default=settings.reranker_model)
+    parser.add_argument("--model", default="BAAI/bge-reranker-base")
     parser.add_argument("--device", default=settings.reranker_device)
     parser.add_argument("--batch-size", type=int, default=settings.reranker_batch_size)
     parser.add_argument("--max-length", type=int, default=settings.reranker_max_length)

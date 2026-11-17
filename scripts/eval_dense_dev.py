@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default=settings.embedding_device)
     parser.add_argument("--dtype", default=settings.embedding_dtype, choices=["float32", "float16"])
     parser.add_argument("--model", default=settings.embedding_model)
+    parser.add_argument(
+        "--query-instruction",
+        default=settings.embedding_query_instruction,
+        help="Instruction prepended to queries; pass an empty string to disable it.",
+    )
     parser.add_argument("--tenant-id", type=uuid.UUID, default=settings.default_tenant_id)
     parser.add_argument(
         "--knowledge-base-id",
@@ -85,7 +90,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> dict[str, object]
         device=args.device,
         batch_size=settings.embedding_batch_size,
         dtype=args.dtype,
-        query_instruction=settings.embedding_query_instruction,
+        query_instruction=args.query_instruction,
     )
     engine = build_engine(settings)
     session_factory = build_session_factory(engine)

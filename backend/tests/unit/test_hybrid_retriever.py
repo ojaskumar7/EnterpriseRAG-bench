@@ -6,7 +6,7 @@ import inspect
 
 import pytest
 
-from app.retrieval.hybrid import HybridRetriever
+from app.retrieval.hybrid import Bm25DenseRetriever, HybridRetriever
 from app.retrieval.types import RetrievedChunk
 
 
@@ -99,3 +99,15 @@ def test_retriever_does_not_expose_evaluation_metadata() -> None:
 
     for name in ("expected_doc_ids", "question_type", "gold_answer", "source_types_expected"):
         assert name not in parameters
+
+
+@pytest.mark.asyncio
+async def test_bm25_dense_is_the_same_deterministic_rrf_composition() -> None:
+    dense = FakeRetriever([_chunk("a"), _chunk("b")])
+    bm25 = FakeRetriever([_chunk("b"), _chunk("c")])
+    retriever = Bm25DenseRetriever(dense, bm25, candidate_k=2)
+
+    results = await retriever.retrieve("query", top_k=3)
+
+    assert [result.chunk_id for result in results] == ["b", "a", "c"]
+    assert bm25.calls[0]["top_k"] == 3

@@ -145,6 +145,19 @@ Storage after migration `0002`: the `ix_chunks_search_vector` GIN index is about
 index remains about **1.1 GB**. `EXPLAIN` confirms a `Bitmap Index Scan on
 ix_chunks_search_vector`.
 
+## Retrieval quality audit addendum — 2026-11-17
+
+The later exact-BM25 audit kept this ADR's PostgreSQL FTS experiment unchanged and
+added a separate `Bm25DenseRetriever` for production BM25 plus dense RRF. The best
+of six development configurations (`rrf_k=10`, `candidate_k=50`) scored MRR
+`0.6245` and recall@20 `0.8230`, below BM25's `0.6779` and `0.8560`; no generation
+path was switched.
+
+The BGE query instruction remains enabled by default. Prefix-off increased recall@20
+but reduced MRR, while query-side float16 reproduced prefix-on float32 closely. The
+known content-only dense versus title+content BM25 asymmetry remains the leading
+explanation for the gap; full title+content re-embedding is deferred.
+
 **Decision note:** Keep PostgreSQL FTS + RRF for Block 3. The hybrid gain is real but
 small because `websearch_to_tsquery` ANDs natural-language terms; 156 of 169 dev
 questions return zero lexical results. Dense vs the Block 2 baseline is mixed rather than

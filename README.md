@@ -599,6 +599,37 @@ uv run ruff format --check .
 - The production index version was `20261115T131732353721Z-f79d12de1fc6`.
 - Holdout set: not used.
 
+### Retrieval quality audit (2026-11-17)
+
+- The BGE query instruction is configurable through `EMBEDDING_QUERY_INSTRUCTION`
+  and `--query-instruction`; an empty value disables it. Documents never receive
+  the query instruction.
+- On 169 development questions, prefix-on float32 scored recall@20 `0.5777` and
+  MRR `0.4347`; prefix-off scored `0.6048` and `0.4255`. Prefix-on float16
+  reproduced the result closely at `0.5777` and `0.4345`. The prefix is retained
+  because it improves ranking quality (MRR) and matches BGE's intended interface.
+- The five-question title sanity check found answer-bearing title/metadata terms
+  in 3/5 gold titles (`Satellite Grove`, `Procurement: Legal Risk Triage &
+  Escalation SOP`, and `Kernel Snapshot Observability Contract and Diagnostic
+  Playbook`); the other two titles were weaker. This supports, but does not prove,
+  the known asymmetry: BM25 indexes `title\ncontent`, while dense embeds content
+  only.
+- Added `Bm25DenseRetriever` and `bm25_dense` evaluation mode. Six dev-only RRF
+  runs selected `rrf_k=10`, `candidate_k=50`:
+
+| Mode / configuration | recall@1 | recall@5 | recall@10 | recall@20 | MRR |
+|---|---:|---:|---:|---:|---:|
+| BM25 | 0.5138 | 0.7310 | 0.7776 | 0.8560 | 0.6779 |
+| dense, prefix-on float16 | 0.2840 | 0.4761 | 0.5303 | 0.5777 | 0.4345 |
+| BM25+dense RRF (10/50) | 0.4283 | 0.7036 | 0.7803 | 0.8230 | 0.6245 |
+| BGE reranker over BM25 top-50 | 0.5247 | 0.7290 | 0.8203 | 0.8691 | 0.6940 |
+
+- `BAAI/bge-reranker-base` passes the MRR and recall@20 gates and improves context
+  recall to `0.8099` from BM25's `0.7744`, but the literal context-recall-within-
+  `0.01` gate fails because the improvement is `+0.0355`. BM25 remains frozen for
+  generation; reranking is not enabled in production.
+- All audit runs used `data/sample/dev_questions.jsonl`; the holdout was untouched.
+
 ### Block 1 retrospective
 
 - The release data contains duplicate `doc_id` values, so composite document identity is required. This was discovered from the real data rather than assumed during planning.

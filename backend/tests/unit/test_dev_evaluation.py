@@ -149,6 +149,7 @@ async def test_run_all_mode_wires_all_retrievers(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(cli, "DenseRetriever", FakeRetriever)
     monkeypatch.setattr(cli, "LexicalRetriever", FakeRetriever)
     monkeypatch.setattr(cli, "HybridRetriever", FakeRetriever)
+    monkeypatch.setattr(cli, "Bm25DenseRetriever", FakeRetriever)
     monkeypatch.setattr(cli, "BM25Retriever", FakeRetriever)
     monkeypatch.setattr(cli, "BM25IndexManager", FakeIndexManager)
 
@@ -175,12 +176,14 @@ async def test_run_all_mode_wires_all_retrievers(tmp_path: Path, monkeypatch) ->
         tenant_id=uuid.UUID(int=1),
         knowledge_base_id=uuid.UUID(int=2),
         progress_every=25,
+        index_root=tmp_path / "bm25",
+        query_instruction="",
     )
 
     output = await cli.run(args, settings)
 
-    assert set(output["modes"]) == {"dense", "lexical", "hybrid", "bm25"}
-    assert evaluated_labels == ["dense", "lexical", "hybrid", "bm25"]
+    assert set(output["modes"]) == {"dense", "lexical", "hybrid", "bm25", "bm25_dense"}
+    assert evaluated_labels == ["dense", "lexical", "hybrid", "bm25", "bm25_dense"]
     assert output["modes"]["bm25"]["latency_top50"]["count"] == 1
     assert "latency_top50" not in output["modes"]["dense"]
     assert output_path.is_file()
