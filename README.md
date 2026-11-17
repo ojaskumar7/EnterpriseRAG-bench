@@ -793,6 +793,57 @@ The Block 5 context builder was also corrected to accept finite negative cross-e
 scores. With the old non-positive filter, 20 reranked contexts were empty; after the fix, every
 development question produced a context.
 
+## Block 5 measured results
+
+Block 5 added deterministic, citation-ready context construction over BM25 top-50 with a
+4,000-token budget and a three-chunks-per-document cap, evaluated on the 169 development
+questions:
+
+| Metric | Value |
+|---|---:|
+| Candidate document recall (top-50) | 0.8962 |
+| Candidate document recall at context size | 0.7692 |
+| Context document recall | 0.7744 |
+| Recall gap at context size | +0.0052 |
+| Context MRR | 0.6710 |
+| Budget adherence | 1.0 |
+| Mean context tokens | 3970.1 |
+| Mean utilization | 0.9925 |
+| Duplicate chunks / empty contexts | 0 / 0 |
+| Build latency p50 / p95 | 0.10 ms / 0.15 ms |
+
+The small positive gap against same-context-size BM25 shows the builder loses almost no
+evidence to deduplication, the document cap, or budget truncation.
+
+## Block 7-9 measured results: grounded generation and grounding safety
+
+Blocks 7 through 9 added grounded Gemini generation with citation validation, offline
+reporting, and deterministic grounding-safety checks. Both live runs used
+`gemini-3.5-flash-lite`; the holdout ran once, after all tuning was frozen, with a single
+successful response per question.
+
+| Metric | Dev (169) | Holdout (42) |
+|---|---:|---:|
+| Grounded | 118 (69.8%) | 28 (66.7%) |
+| Abstain | 39 (23.1%) | 12 (28.6%) |
+| Conflict | 12 (7.1%) | 2 (4.8%) |
+| Citation validity (cited answers) | 1.0 | 1.0 |
+| Citation presence | 0.769 | 0.714 |
+| Selected-context document recall | 0.7744 | 0.7440 |
+| Mean context tokens | 3970.1 | 3963.5 |
+| Mean citation count | 10.3 | 10.2 |
+| Mean claim count | 2.1 | 2.1 |
+| Answer latency p50 / p95 | 4.4 s / 10.6 s | 1.9 s / 5.6 s |
+
+The holdout tracks the development split on every metric, with no development-split
+overfitting. Citation presence equals grounded plus conflict answers because abstained
+answers carry no citations by policy. Context recall and token counts reproduce the Block 5
+context metrics exactly, confirming the generation path builds the same deterministic
+context the offline evaluator measured.
+
+These are generation diagnostics, not answer-correctness claims: the report measures
+citation structure and document recall. Semantic faithfulness judging remains future work.
+
 ## Development Roadmap
 
 | Block | Focus | Status |
