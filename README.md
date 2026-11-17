@@ -12,8 +12,8 @@ cross-encoder reranking, grounded Gemini generation with grounding-safety checks
 generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
 observability, and the local operator frontend are implemented and verified on the real
 subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
-reranking remain documented experiments. The live full-split generation evaluation,
-holdout benchmark reporting, and production deployment are the remaining work.**
+reranking remain documented experiments. The 169-question live generation evaluation is
+complete; the holdout benchmark report and production deployment are the remaining work.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -802,8 +802,8 @@ development question produced a context.
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
-| 7 | Gemini integration, citations, and grounded generation | complete (live full evaluation deferred) |
-| 8 | Evaluation framework and retrieval benchmarking | complete (live full evaluation deferred) |
+| 7 | Gemini integration, citations, and grounded generation | complete (holdout evaluation pending) |
+| 8 | Evaluation framework and retrieval benchmarking | complete (holdout evaluation pending) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | complete (external identity and operational controls deferred) |
 | 11 | Asynchronous ingestion and document lifecycle | complete (durable job workers deferred) |
@@ -823,10 +823,9 @@ development question produced a context.
 ## Known Limitations
 
 - Blocks 7–9 add grounded generation, offline evaluation, and deterministic grounding
-  safety. Generation is live and provider-backed; it is not yet benchmark-validated on the
-  full development split.
-- Blocks 7–9 provide the generation, deterministic evaluation, and grounding-safety
-  foundation. Full live evaluation and semantic faithfulness judging remain deferred.
+  safety. The 169-question live generation run is complete (citation validity `1.0`,
+  abstention `0.231`, p50 `4.4 s`); the holdout report and semantic faithfulness judging
+  remain deferred.
 - Block 9 does not infer source authority or resolve document-version conflicts automatically.
 - Block 10 has the initial API/auth boundary; external identity providers, refresh tokens,
   rate limiting, and production secret rotation are still deferred.

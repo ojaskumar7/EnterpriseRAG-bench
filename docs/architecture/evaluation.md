@@ -36,7 +36,23 @@ for scoring; they are never sent to retrieval or Gemini.
 
 ## Current evidence
 
-The first five-question live sample using `gemini-3.5-flash-lite` produced citation
-validity `1.0`, citation presence `0.8`, abstention `0.2`, and selected-context document
-recall `0.8`. These are smoke diagnostics, not final quality claims. The full 169-question
-live run is intentionally deferred until quota and model-capacity planning are settled.
+The full 169-question live development run using `gemini-3.5-flash-lite` produced:
+
+| Metric | Value |
+|---|---:|
+| Grounded decisions | 118 (69.8%) |
+| Abstain decisions | 39 (23.1%) |
+| Conflict decisions | 12 (7.1%) |
+| Citation validity (cited answers) | 1.0 |
+| Citation presence | 0.769 |
+| Selected-context document recall | 0.7744 |
+| Mean context tokens | 3970.1 |
+| Mean citation count | 10.3 |
+| Mean claim count | 2.1 |
+| Answer latency p50 / p95 / max | 4376 / 10553 / 19342 ms |
+
+Citation presence equals grounded plus conflict answers (130 of 169); abstained answers
+carry no citations by policy. Context recall and token counts reproduce the Block 5
+context metrics exactly. These are development-split diagnostics, not benchmark claims:
+the report measures citation structure and document recall, not answer correctness. The
+42-question holdout remains untouched.

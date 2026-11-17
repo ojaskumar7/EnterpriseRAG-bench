@@ -66,8 +66,12 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
 
 - **The first report is deterministic only.** It measures citation structure, document
   recall, abstention, tokens, and latency; it does not judge answer correctness.
-- **The full live generation run is deferred.** The five-question sample is useful for
-  smoke diagnostics, but 169 Gemini calls require an explicit quota and capacity decision.
+- **The full live generation run is complete on the development split.** All 169 questions
+  ran through `gemini-3.5-flash-lite` (chunked, with quota-aware retries): 118 grounded,
+  39 abstain, 12 conflict; citation validity `1.0`; context document recall `0.7744`;
+  p50 latency `4.4 s`. Two provider hiccups occurred: repeated free-tier 429s (fixed by
+  honoring the server's retry hint in the generator) and two transient claim-validation
+  failures that cleared on rerun. The 42-question holdout remains untouched.
 - **No LLM judge yet.** Faithfulness, answer-fact coverage, and unsupported-claim scoring
   require a later labeled or judge-backed evaluation design.
 
