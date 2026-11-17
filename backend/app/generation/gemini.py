@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -95,7 +96,7 @@ class GeminiGenerator:
             except Exception as exc:
                 if not _is_retryable(exc) or attempt == self.max_retries:
                     raise
-                time.sleep(2**attempt)
+                time.sleep(_retry_delay(exc, attempt))
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:
@@ -160,6 +161,20 @@ def _conflicts(value: Any) -> list[Conflict]:
 def _usage_value(usage: Any, field: str) -> int | None:
     value = getattr(usage, field, None)
     return value if isinstance(value, int) and value >= 0 else None
+
+
+def _retry_delay(error: Exception, attempt: int) -> float:
+    if _is_quota_error(error):
+        hint = re.search(r"retry in ([\d.]+)s", str(error), re.IGNORECASE)
+        if hint:
+            return max(float(hint.group(1)), 2**attempt)
+        return 35.0
+    return float(2**attempt)
+
+
+def _is_quota_error(error: Exception) -> bool:
+    message = str(error).upper()
+    return "429" in message or "RESOURCE_EXHAUSTED" in message
 
 
 def _is_retryable(error: Exception) -> bool:

@@ -86,3 +86,23 @@ def test_blank_query_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="blank"):
         GenerationRequest(query=" ", context=context)
+
+
+def test_retry_delay_honors_server_hint() -> None:
+    from app.generation.gemini import _retry_delay
+
+    error = Exception("429 RESOURCE_EXHAUSTED. Please retry in 34.9s. Quota exceeded.")
+    assert _retry_delay(error, 0) >= 34.9
+
+
+def test_retry_delay_falls_back_without_hint() -> None:
+    from app.generation.gemini import _retry_delay
+
+    assert _retry_delay(Exception("429 RESOURCE_EXHAUSTED"), 0) >= 30.0
+
+
+def test_retry_delay_transient_uses_exponential() -> None:
+    from app.generation.gemini import _retry_delay
+
+    assert _retry_delay(Exception("503 UNAVAILABLE"), 0) == 1.0
+    assert _retry_delay(Exception("503 UNAVAILABLE"), 2) == 4.0
