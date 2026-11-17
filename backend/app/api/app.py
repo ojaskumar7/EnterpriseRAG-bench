@@ -7,6 +7,7 @@ import time
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.auth import Principal, get_current_principal, require_knowledge_base
@@ -34,6 +35,14 @@ def create_app(
     app.state.settings = settings or get_settings()
     app.state.query_service = service
     app.state.ingestion_service = ingestion_service
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=app.state.settings.cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
 
     @app.middleware("http")
     async def request_logging(request: Request, call_next):

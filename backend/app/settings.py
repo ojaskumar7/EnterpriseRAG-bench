@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     log_level: str = "INFO"
     json_logs: bool = False
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:4173"])
     default_tenant_id: UUID = DEFAULT_TENANT_ID
     default_knowledge_base_id: UUID = DEFAULT_KNOWLEDGE_BASE_ID
 

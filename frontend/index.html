@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101412" /><title>Redwood / Knowledge Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="topbar"><a class="brand" href="."><span class="brand-mark">R</span><span>REDWOOD<span class="brand-slash">/</span>KI</span></a><div class="topbar-meta"><span class="live-dot"></span><span id="health-label">checking runtime</span><span class="mono">v0.1</span></div></header>
+    <main class="shell">
+      <section class="hero reveal reveal-1"><p class="eyebrow">Enterprise knowledge, made legible</p><h1>Ask the corpus.<br /><em>Trust the trail.</em></h1><p class="hero-copy">A grounded workspace for finding answers across the Redwood knowledge base, with the evidence visible beside every response.</p></section>
+      <section class="workspace reveal reveal-2">
+        <div class="query-card panel"><div class="panel-heading"><div><span class="section-index">01</span><h2>Query the archive</h2></div><span class="status-pill" id="grounding-pill">READY</span></div>
+          <form id="query-form"><label class="field-label" for="question">Your question</label><textarea id="question" rows="4" placeholder="What do I need to know?" required></textarea><div class="form-row"><label class="field-label compact" for="knowledge-base">Knowledge base<input id="knowledge-base" value="00000000-0000-0000-0000-000000000002" required /></label><label class="field-label compact" for="top-k">Evidence depth<select id="top-k"><option value="25">25 passages</option><option value="50" selected>50 passages</option><option value="100">100 passages</option></select></label></div><button class="primary-button" type="submit"><span>Search with evidence</span><span class="button-arrow">↗</span></button></form>
+          <p class="helper"><span class="keycap">⌘</span> Enter to search <span class="helper-divider">·</span> answers are generated only from retrieved context</p>
+        </div>
+        <aside class="side-column"><div class="panel signal-panel"><div class="panel-heading"><div><span class="section-index">02</span><h2>Runtime signal</h2></div></div><div class="signal-grid"><div><span class="metric" id="latency-metric">—</span><span>last latency</span></div><div><span class="metric" id="citation-metric">—</span><span>citations</span></div></div><div class="signal-line"><span class="signal-line-fill" id="signal-fill"></span></div><p class="muted" id="signal-copy">Run a query to inspect grounding quality.</p></div>
+          <div class="panel access-panel"><div class="panel-heading"><div><span class="section-index">03</span><h2>Connection</h2></div><button class="text-button" id="settings-toggle" type="button">edit</button></div><p class="connection-state"><span class="connection-dot"></span><span id="connection-copy">Local API · token not set</span></p><div id="settings" class="settings hidden"><label class="field-label compact" for="api-url">API base URL<input id="api-url" value="http://localhost:8000" /></label><label class="field-label compact" for="token">Bearer token<input id="token" type="password" placeholder="paste a JWT for this session" autocomplete="off" /></label><button class="secondary-button" id="save-settings" type="button">Save connection</button></div></div></aside>
+      </section>
+      <section class="result-layout reveal reveal-3"><article class="panel answer-panel"><div class="panel-heading"><div><span class="section-index">04</span><h2>Answer</h2></div><span class="answer-state" id="answer-state">WAITING</span></div><div id="answer-content" class="empty-state"><span class="empty-symbol">✳</span><p>Your grounded answer will appear here.</p></div></article><aside class="panel citations-panel"><div class="panel-heading"><div><span class="section-index">05</span><h2>Evidence trail</h2></div><span class="citation-count" id="citation-count">0</span></div><div id="citations" class="citation-list"><p class="muted">Citations will be listed after a query.</p></div></aside></section>
+      <section class="panel jobs-panel reveal reveal-4"><div class="panel-heading"><div><span class="section-index">06</span><h2>Ingestion watch</h2></div><span class="status-pill neutral">ASYNC</span></div><div class="job-controls"><label class="field-label compact" for="job-id">Track a job ID<input id="job-id" placeholder="UUID from POST /ingestion/jobs" /></label><button class="secondary-button" id="track-job" type="button">Check status</button></div><div id="job-result" class="job-result muted">No job selected. Ingestion operations remain server-configured.</div></section>
+    </main><footer><span>REDWOOD / KNOWLEDGE INTELLIGENCE</span><span class="mono">grounded by retrieval · built for operators</span></footer><script src="app.js" type="module"></script>
+  </body>
+</html>

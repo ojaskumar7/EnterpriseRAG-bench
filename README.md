@@ -212,6 +212,20 @@ EDA summary and pipeline design.
 
 ## Repository Layout
 
+### Local query workspace
+
+Block 12 now includes a dependency-free operator UI in [`frontend/`](frontend/).
+Run the API, then start the UI with:
+
+```bash
+python -m http.server 4173 --directory frontend
+```
+
+Open `http://localhost:4173`, configure the API URL and a scoped JWT under
+**Connection**, and query the configured knowledge base. The UI calls `/health`,
+`/query`, and `/ingestion/jobs/{job_id}`; it does not issue or persist tokens on
+the server. `CORS_ORIGINS` controls which browser origins may call the API.
+
 Implemented Blocks 1-6 structure:
 
 ```text
