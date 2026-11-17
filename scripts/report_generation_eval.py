@@ -31,12 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / "data/processed/generation_dev_metrics.md",
     )
+    parser.add_argument(
+        "--allow-holdout",
+        action="store_true",
+        help="explicitly permit holdout inputs for the official benchmark report",
+    )
     return parser
 
 
-def read_records(path: Path) -> list[dict[str, object]]:
-    if "holdout" in path.name.lower():
-        raise ValueError("holdout inputs are not allowed")
+def read_records(path: Path, *, allow_holdout: bool = False) -> list[dict[str, object]]:
+    if "holdout" in path.name.lower() and not allow_holdout:
+        raise ValueError("holdout inputs are not allowed (pass --allow-holdout)")
     records: list[dict[str, object]] = []
     with path.open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -55,7 +60,7 @@ def read_records(path: Path) -> list[dict[str, object]]:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        summary = summarize_generation(read_records(args.input))
+        summary = summarize_generation(read_records(args.input, allow_holdout=args.allow_holdout))
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n",

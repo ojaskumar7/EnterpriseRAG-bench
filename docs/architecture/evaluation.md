@@ -54,5 +54,26 @@ The full 169-question live development run using `gemini-3.5-flash-lite` produce
 Citation presence equals grounded plus conflict answers (130 of 169); abstained answers
 carry no citations by policy. Context recall and token counts reproduce the Block 5
 context metrics exactly. These are development-split diagnostics, not benchmark claims:
-the report measures citation structure and document recall, not answer correctness. The
-42-question holdout remains untouched.
+the report measures citation structure and document recall, not answer correctness.
+
+## Holdout report
+
+The 42-question holdout ran once, after all development tuning was frozen, via
+`scripts/report_generation_eval.py --allow-holdout`:
+
+| Metric | Holdout (42) | Dev (169) |
+|---|---:|---:|
+| Grounded | 28 (66.7%) | 118 (69.8%) |
+| Abstain | 12 (28.6%) | 39 (23.1%) |
+| Conflict | 2 (4.8%) | 12 (7.1%) |
+| Citation validity | 1.0 | 1.0 |
+| Citation presence | 0.714 | 0.769 |
+| Selected-context document recall | 0.7440 | 0.7744 |
+| Mean context tokens | 3963.5 | 3970.1 |
+| Answer latency p50 / p95 | 1915 / 5609 ms | 4376 / 10553 ms |
+
+Holdout behavior tracks the development split closely, with no evidence of
+development-split overfitting. All runs used `gemini-3.5-flash-lite` with a single
+successful response per question (chunk-scoped reruns only replaced chunks that produced
+no output). The report measures citation structure and document recall, not answer
+correctness; semantic faithfulness judging remains future work.

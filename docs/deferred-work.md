@@ -71,7 +71,10 @@ trade-off, not an accidental omission. Revisit after the end-to-end project is c
   39 abstain, 12 conflict; citation validity `1.0`; context document recall `0.7744`;
   p50 latency `4.4 s`. Two provider hiccups occurred: repeated free-tier 429s (fixed by
   honoring the server's retry hint in the generator) and two transient claim-validation
-  failures that cleared on rerun. The 42-question holdout remains untouched.
+  failures that cleared on rerun. The 42-question holdout was then run once with zero
+  reruns: 28 grounded, 12 abstain, 2 conflict; citation validity `1.0`; context document
+  recall `0.7440`; p50 latency `1.9 s`. Holdout metrics track the development split, so
+  no development-split overfitting is evident.
 - **No LLM judge yet.** Faithfulness, answer-fact coverage, and unsupported-claim scoring
   require a later labeled or judge-backed evaluation design.
 

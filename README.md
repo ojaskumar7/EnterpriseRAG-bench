@@ -12,8 +12,9 @@ cross-encoder reranking, grounded Gemini generation with grounding-safety checks
 generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
 observability, and the local operator frontend are implemented and verified on the real
 subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
-reranking remain documented experiments. The 169-question live generation evaluation is
-complete; the holdout benchmark report and production deployment are the remaining work.**
+reranking remain documented experiments. The live generation evaluation is complete on
+both the 169-question development split and the 42-question holdout; production
+deployment is the remaining work.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -802,8 +803,8 @@ development question produced a context.
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
 | 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
-| 7 | Gemini integration, citations, and grounded generation | complete (holdout evaluation pending) |
-| 8 | Evaluation framework and retrieval benchmarking | complete (holdout evaluation pending) |
+| 7 | Gemini integration, citations, and grounded generation | complete (holdout reported) |
+| 8 | Evaluation framework and retrieval benchmarking | complete (holdout reported) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | complete (external identity and operational controls deferred) |
 | 11 | Asynchronous ingestion and document lifecycle | complete (durable job workers deferred) |
@@ -823,9 +824,8 @@ development question produced a context.
 ## Known Limitations
 
 - Blocks 7–9 add grounded generation, offline evaluation, and deterministic grounding
-  safety. The 169-question live generation run is complete (citation validity `1.0`,
-  abstention `0.231`, p50 `4.4 s`); the holdout report and semantic faithfulness judging
-  remain deferred.
+  safety. Live generation runs are complete on both splits (citation validity `1.0`,
+  holdout abstention `0.286`); semantic faithfulness judging remains deferred.
 - Block 9 does not infer source authority or resolve document-version conflicts automatically.
 - Block 10 has the initial API/auth boundary; external identity providers, refresh tokens,
   rate limiting, and production secret rotation are still deferred.
@@ -880,6 +880,4 @@ development question produced a context.
 
 ## License and Attribution
 
-The EnterpriseRAG-Bench dataset and official tooling are released under the MIT license. This project will include attribution and the dataset citation when benchmark results are reported.
-
-The dataset contains a benchmark canary string and should not be included in model training corpora.
+This project uses the [`onyx-dot-app/EnterpriseRAG-Bench`](https://huggingface.co/datasets/onyx-dot-app/EnterpriseRAG-Bench) dataset (MIT license) for all ingestion, retrieval, and evaluation results reported in this repository. Benchmark canary: the dataset contains a canary string and should not be included in model training corpora.
