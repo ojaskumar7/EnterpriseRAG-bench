@@ -434,9 +434,9 @@ uv run python scripts/eval_reranking_dev.py   --top-k 50 --candidate-k 50   --ou
 uv run python scripts/eval_context_dev.py --reranked   --top-k 50   --output data/processed/context_dev_metrics_block6_reranked.json
 ```
 
-The reranker is optional and explicit. It preserves the original BM25 score in
-`retrieval_score`; the context builder keeps finite negative cross-encoder scores. The
-development gate failed, so BM25 remains the production path.
+The reranker is optional and explicit. The frozen audit candidate reranks BM25 ranks 1–10
+and appends untouched ranks 11–50; it preserves the original BM25 score in
+`retrieval_score`. It remains a generation candidate, not the unconditional production default.
 
 ### Block 7 workflow
 
@@ -599,36 +599,11 @@ uv run ruff format --check .
 - The production index version was `20261115T131732353721Z-f79d12de1fc6`.
 - Holdout set: not used.
 
-### Retrieval quality audit (2026-11-17)
+### Retrieval quality audit
 
-- The BGE query instruction is configurable through `EMBEDDING_QUERY_INSTRUCTION`
-  and `--query-instruction`; an empty value disables it. Documents never receive
-  the query instruction.
-- On 169 development questions, prefix-on float32 scored recall@20 `0.5777` and
-  MRR `0.4347`; prefix-off scored `0.6048` and `0.4255`. Prefix-on float16
-  reproduced the result closely at `0.5777` and `0.4345`. The prefix is retained
-  because it improves ranking quality (MRR) and matches BGE's intended interface.
-- The five-question title sanity check found answer-bearing title/metadata terms
-  in 3/5 gold titles (`Satellite Grove`, `Procurement: Legal Risk Triage &
-  Escalation SOP`, and `Kernel Snapshot Observability Contract and Diagnostic
-  Playbook`); the other two titles were weaker. This supports, but does not prove,
-  the known asymmetry: BM25 indexes `title\ncontent`, while dense embeds content
-  only.
-- Added `Bm25DenseRetriever` and `bm25_dense` evaluation mode. Six dev-only RRF
-  runs selected `rrf_k=10`, `candidate_k=50`:
-
-| Mode / configuration | recall@1 | recall@5 | recall@10 | recall@20 | MRR |
-|---|---:|---:|---:|---:|---:|
-| BM25 | 0.5138 | 0.7310 | 0.7776 | 0.8560 | 0.6779 |
-| dense, prefix-on float16 | 0.2840 | 0.4761 | 0.5303 | 0.5777 | 0.4345 |
-| BM25+dense RRF (10/50) | 0.4283 | 0.7036 | 0.7803 | 0.8230 | 0.6245 |
-| BGE reranker over BM25 top-50 | 0.5247 | 0.7290 | 0.8203 | 0.8691 | 0.6940 |
-
-- `BAAI/bge-reranker-base` passes the MRR and recall@20 gates and improves context
-  recall to `0.8099` from BM25's `0.7744`, but the literal context-recall-within-
-  `0.01` gate fails because the improvement is `+0.0355`. BM25 remains frozen for
-  generation; reranking is not enabled in production.
-- All audit runs used `data/sample/dev_questions.jsonl`; the holdout was untouched.
+Detailed dense/BM25 overlap, prefix and RRF results, the title-sanity limitation,
+and the frozen reranker audit now live in
+[`docs/evaluation/retrieval-quality-audit.md`](docs/evaluation/retrieval-quality-audit.md).
 
 ### Block 1 retrospective
 
@@ -718,8 +693,8 @@ Development retrieval metrics on the 169 development questions (`top_k=20`):
 | recall@1 | 0.5138 |
 | recall@5 | 0.7310 |
 | recall@10 | 0.7776 |
-| recall@20 | 0.8494 |
-| MRR | 0.6771 |
+| recall@20 | 0.8560 |
+| MRR | 0.6779 |
 | zero-result questions | 0 |
 | top-50 p50 latency | 8.5 ms |
 | top-50 p95 latency | 12.9 ms |
@@ -793,9 +768,9 @@ evidence to deduplication, the document cap, or budget truncation.
 ## Block 7-9 measured results: grounded generation and grounding safety
 
 Blocks 7 through 9 added grounded Gemini generation with citation validation, offline
-reporting, and deterministic grounding-safety checks. Both live runs used
-`gemini-3.5-flash-lite`; the holdout ran once, after all tuning was frozen, with a single
-successful response per question.
+reporting, and deterministic grounding-safety checks. The historical BM25 baseline used
+`gemini-3.5-flash-lite` and its holdout ran once. The current frozen depth-10 candidate
+holdout remains gated on a complete dev generation comparison.
 
 | Metric | Dev (169) | Holdout (42) |
 |---|---:|---:|
@@ -828,8 +803,8 @@ citation structure and document recall. Semantic faithfulness judging remains fu
 | 3 | PostgreSQL FTS, hybrid retrieval, Reciprocal Rank Fusion | complete |
 | 4 | BM25 productionization: versioned indexes, atomic publish, query CLI | complete |
 | 5 | Evidence selection and context construction | complete |
-| 6 | Cross-encoder reranking and retrieval optimization | complete (not adopted) |
-| 7 | Gemini integration, citations, and grounded generation | complete (holdout reported) |
+| 6 | Cross-encoder reranking and retrieval optimization | complete (depth-10 candidate gated) |
+| 7 | Gemini integration, citations, and grounded generation | baseline complete; candidate gate open |
 | 8 | Evaluation framework and retrieval benchmarking | complete (holdout reported) |
 | 9 | Hallucination control, abstention, multi-document reasoning | complete (semantic judge deferred) |
 | 10 | FastAPI, authentication, and multi-tenancy | complete (external identity and operational controls deferred) |
@@ -849,15 +824,16 @@ citation structure and document recall. Semantic faithfulness judging remains fu
 
 ## Current Status
 
-**Blocks 1 through 12 are complete. The ingestion pipeline, dense retrieval stack,
+**Blocks 1 through 12 are implemented, with the frozen-candidate generation gate still
+open. The ingestion pipeline, dense retrieval stack,
 production BM25 retrieval path, token-budgeted context construction, optional
 cross-encoder reranking, grounded Gemini generation with grounding-safety checks, offline
 generation evaluation, the authenticated query API, the in-process ingestion lifecycle,
 observability, and the local operator frontend are implemented and verified on the real
 subset. BM25 is the production retriever; dense, PostgreSQL FTS, hybrid RRF, and MiniLM
-reranking remain documented experiments. The live generation evaluation is complete on
-both the 169-question development split and the 42-question holdout; production
-deployment is the remaining work.**
+reranking remain documented experiments or gated candidates. The historical BM25 generation
+evaluation includes a holdout run, but the frozen candidate holdout has not been run;
+production deployment is the remaining work.**
 
 The approved plan is in [`plan.md`](plan.md). The project currently provides:
 
@@ -899,23 +875,24 @@ documented in [`docs/architecture/ingestion.md`](docs/architecture/ingestion.md)
 [`docs/architecture/context-construction.md`](docs/architecture/context-construction.md), and
 [`docs/architecture/reranking.md`](docs/architecture/reranking.md).
 
-Generation, the full benchmark evaluation harness, authentication, and the API are
-deliberately deferred to later blocks. Block 7 now provides the generation boundary and
-Gemini provider; calibrated abstention and answer-quality evaluation remain deferred.
-The MiniLM reranker is available but not adopted because it failed its development gate.
+Generation, benchmark evaluation, authentication, and the API are implemented. Calibrated
+abstention, semantic answer-quality judging, external identity, and production controls
+remain constrained or deferred. The frozen depth-10 reranker candidate is still gated on
+a complete provider-backed dev generation comparison.
 
 
-## Known Limitations
+## Known constraints
 
-- Blocks 7–9 add grounded generation, offline evaluation, and deterministic grounding
-  safety. Live generation runs are complete on both splits (citation validity `1.0`,
-  holdout abstention `0.286`); semantic faithfulness judging remains deferred.
+- The frozen candidate generation run is incomplete because Gemini returned repeated 503s;
+  43 of 169 dev questions are cached. The partial paired sample regresses abstention
+  outcomes, so the candidate holdout has not been run.
 - Block 9 does not infer source authority or resolve document-version conflicts automatically.
 - Block 10 has the initial API/auth boundary; external identity providers, refresh tokens,
   rate limiting, and production secret rotation are still deferred.
-- BM25 is the production retriever. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM reranking remain documented experiments, not the production path.
+- BM25 remains the production default; the v2-m3 depth-10 path is a frozen evaluation
+  candidate. Dense, PostgreSQL FTS, hybrid RRF, and MiniLM remain documented experiments.
 - The MiniLM cross-encoder reduced retrieval and context quality on the development split; a stronger or domain-tuned reranker is deferred.
-- Reranker scores replace BM25 ordering without blending; there is no reranker cache or cross-query batching.
+- The frozen reranker orders BM25 ranks 1–10 and appends untouched BM25 ranks 11–50.
 - The reranker loads model weights on first use, adding startup latency and about 0.34 s p50 per-query latency in the measured run.
 - Hybrid is retained as an experiment; it measured below BM25 on every headline metric and hybrid recall@5 is slightly below dense.
 - BM25 indexes rebuild in batch. Adding, removing, or modifying chunks requires rebuilding the affected tenant/knowledge-base index.
@@ -930,12 +907,17 @@ The MiniLM reranker is available but not adopted because it failed its developme
 - Document-version comparison is not supported by the dataset and requires a separate design.
 - Chunking is fixed-size and token-aware, not heading-aware or semantic.
 - Chunking defaults are a baseline and have not been experimentally tuned.
-- Dense, lexical, hybrid, and BM25 retrieval have development-split diagnostics only; there are no official benchmark results yet.
+- Dense, lexical, hybrid, BM25, and reranker quality results are development diagnostics;
+  no frozen-candidate holdout result exists.
 - BM25 uses fixed English stemming and stopwords; `k1`/`b` are settings recorded in the manifest, and changing them requires rebuilding the index.
 - PostgreSQL FTS still uses the database `english` text search configuration for the lexical experiment.
 - RRF uses ranks only and discards score magnitude; candidate depth (`candidate_k`) bounds what the hybrid experiment can recover.
 - The measured index was built with `float16` weights because the laptop GPU thermally throttles; queries must use the same dtype.
-- No multi-tenant authentication or authorization exists yet.
+- The API has JWT authentication and tenant-scoped authorization contracts; external
+  identity providers, refresh tokens, rate limiting, and production secret rotation remain deferred.
+- Full title+content dense re-embedding was not completed; only a 3/5 title sanity check exists.
+- The 30 unanswerable-question generation cache is partial: 24/30 evaluated,
+  abstention recall `0.6667` (16/24); 6 remain while the provider is unavailable.
 
 ## Documentation
 
@@ -946,6 +928,7 @@ The MiniLM reranker is available but not adopted because it failed its developme
 - [`docs/architecture/bm25-retrieval.md`](docs/architecture/bm25-retrieval.md): production BM25 corpus, versioned index layout, atomic publish, runtime flow, operations, and measured results.
 - [`docs/architecture/context-construction.md`](docs/architecture/context-construction.md): context builder, packing policy, token budgeting, rendering, and measured results.
 - [`docs/architecture/reranking.md`](docs/architecture/reranking.md): optional cross-encoder flow, score contract, commands, measured regression, and decision.
+- [`docs/evaluation/retrieval-quality-audit.md`](docs/evaluation/retrieval-quality-audit.md): dense/BM25 overlap, gap explanation, title re-embedding status, and frozen-candidate links.
 - [`docs/architecture/generation.md`](docs/architecture/generation.md): grounded generation boundary, Gemini configuration, prompt construction, and citation validation.
 - [`docs/architecture/evaluation.md`](docs/architecture/evaluation.md): offline generation report methodology and measured summaries.
 - [`docs/architecture/grounding-safety.md`](docs/architecture/grounding-safety.md): evidence gates, structured claim checks, and conflict surfacing.

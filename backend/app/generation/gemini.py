@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from typing import Any
@@ -22,12 +23,14 @@ from app.settings import Settings
 class GeminiGenerator:
     """Lazily initialized Gemini provider for grounded answers."""
 
-    def __init__(self, settings: Settings, *, model: str | None = None) -> None:
+    def __init__(self, settings: Settings, *, model: str | None = None, retry_cap: int | None = None) -> None:
         self.api_key = settings.gemini_api_key
         self.model = model or settings.gemini_model
         self.temperature = settings.gemini_temperature
         self.max_output_tokens = settings.gemini_max_output_tokens
-        self.max_retries = settings.gemini_max_retries
+        self.max_retries = settings.gemini_max_retries if retry_cap is None else retry_cap
+        if self.max_retries < 0:
+            raise ValueError("retry_cap must be non-negative")
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -96,7 +99,8 @@ class GeminiGenerator:
             except Exception as exc:
                 if not _is_retryable(exc) or attempt == self.max_retries:
                     raise
-                time.sleep(_retry_delay(exc, attempt))
+                delay = _retry_delay(exc, attempt)
+                time.sleep(delay + random.uniform(0.0, min(1.0, delay * 0.25)))
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:

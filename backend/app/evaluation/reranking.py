@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import random
 import sys
 import time
 from collections.abc import Sequence
 
 from app.evaluation.dev import DevQuestion, RetrieverProtocol, latency_summary
-from app.retrieval.metrics import DEFAULT_K_VALUES, evaluate_retrieval
+from app.retrieval.metrics import (
+    DEFAULT_K_VALUES,
+    evaluate_retrieval,
+    recall_at_k,
+    reciprocal_rank,
+)
 
 
 async def evaluate_reranking(
@@ -78,11 +84,44 @@ async def evaluate_reranking(
         for key in bm25_metrics
         if isinstance(bm25_metrics[key], (int, float))
     }
+    paired = []
+    for row in per_question:
+        expected = row["expected_doc_ids"]
+        base_mrr = reciprocal_rank(row["bm25_doc_ids"], expected)
+        rerank_mrr = reciprocal_rank(row["reranked_doc_ids"], expected)
+        base_r5 = recall_at_k(row["bm25_doc_ids"], expected, 5)
+        rerank_r5 = recall_at_k(row["reranked_doc_ids"], expected, 5)
+        row["bm25_mrr"] = base_mrr
+        row["reranked_mrr"] = rerank_mrr
+        row["bm25_recall_at_5"] = base_r5
+        row["reranked_recall_at_5"] = rerank_r5
+        paired.append((base_mrr, rerank_mrr, base_r5, rerank_r5))
+    wins = sum(r > b for b, r, _, _ in paired)
+    losses = sum(r < b for b, r, _, _ in paired)
+    ties = len(paired) - wins - losses
+    rng = random.Random(20261117)
+    samples = []
+    for _ in range(10000):
+        draw = [paired[rng.randrange(len(paired))] for _ in paired]
+        samples.append((
+            sum(rm - bm for bm, rm, _, _ in draw) / len(draw),
+            sum(rr - br for _, _, br, rr in draw) / len(draw),
+        ))
+    mrr_samples = sorted(sample[0] for sample in samples)
+    recall_samples = sorted(sample[1] for sample in samples)
+    ci = {
+        "mrr_delta": [mrr_samples[249], mrr_samples[9749]],
+        "recall_at_5_delta": [recall_samples[249], recall_samples[9749]],
+        "confidence": 0.95,
+        "bootstrap_resamples": 10000,
+        "seed": 20261117,
+    }
     return {
         "params": {"top_k": top_k, "candidate_k": candidate_k},
         "bm25": {"metrics": bm25_metrics},
         "reranked": {"metrics": reranked_metrics},
         "delta": delta,
+        "paired_analysis": {"wins": wins, "losses": losses, "ties": ties, "bootstrap_ci": ci},
         "latency_ms": {
             "bm25": latency_summary(bm25_latencies),
             "reranked": latency_summary(reranked_latencies),

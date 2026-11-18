@@ -66,6 +66,28 @@ async def test_ties_break_by_chunk_id_and_slices_top_k() -> None:
     assert [result.chunk_id for result in results] == ["a"]
 
 
+async def test_preserve_tail_reranks_head_and_appends_bm25_tail() -> None:
+    base = FakeRetriever(
+        [
+            chunk("a", "d1", 10.0),
+            chunk("b", "d2", 9.0),
+            chunk("c", "d3", 8.0),
+            chunk("d", "d4", 7.0),
+        ]
+    )
+    retriever = RerankedRetriever(
+        base,
+        FakeReranker([0.1, 0.9]),
+        candidate_k=2,
+        preserve_tail=True,
+    )
+
+    results = await retriever.retrieve("query", top_k=4)
+
+    assert [result.chunk_id for result in results] == ["b", "a", "c", "d"]
+    assert base.calls[0]["top_k"] == 4
+
+
 async def test_empty_query_and_no_candidates_skip_model() -> None:
     base = FakeRetriever([chunk("a", "d1", 1.0)])
     reranker = FakeReranker([1.0])

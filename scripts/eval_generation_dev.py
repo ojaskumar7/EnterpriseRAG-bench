@@ -20,8 +20,10 @@ from app.db.session import build_engine, build_session_factory  # noqa: E402
 from app.generation.gemini import GeminiGenerator  # noqa: E402
 from app.generation.safety import GroundingPolicy, apply_grounding_policy  # noqa: E402
 from app.generation.types import GenerationError, GenerationRequest  # noqa: E402
+from app.reranking.cross_encoder import CrossEncoderReranker  # noqa: E402
 from app.retrieval.bm25 import BM25Retriever  # noqa: E402
 from app.retrieval.bm25_index import BM25IndexError, BM25IndexManager  # noqa: E402
+from app.retrieval.reranked import RerankedRetriever  # noqa: E402
 from app.settings import Settings, get_settings  # noqa: E402
 
 
@@ -35,6 +37,15 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     parser.add_argument("--question-id", action="append")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--retriever", choices=("bm25", "reranked_bm25"), default="bm25")
+    parser.add_argument("--candidate-k", type=int, default=50)
+    parser.add_argument("--reranker-model", default="BAAI/bge-reranker-v2-m3")
+    parser.add_argument("--reranker-device", default=settings.reranker_device)
+    parser.add_argument("--reranker-batch-size", type=int, default=settings.reranker_batch_size)
+    parser.add_argument("--reranker-max-length", type=int, default=settings.reranker_max_length)
+    parser.add_argument("--cache", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=20)
+    parser.add_argument("--retry-cap", type=int, default=settings.gemini_max_retries)
     parser.add_argument("--token-budget", type=int, default=4000)
     parser.add_argument("--max-chunks-per-doc", type=int, default=3)
     parser.add_argument("--source-type", action="append", dest="source_types")
@@ -73,10 +84,16 @@ async def run(args: argparse.Namespace, settings: Settings) -> list[dict[str, ob
         raise ValueError("limit must be positive")
     if args.top_k <= 0:
         raise ValueError("top-k must be positive")
+    if args.candidate_k <= 0:
+        raise ValueError("candidate-k must be positive")
     if args.token_budget <= 0:
         raise ValueError("token-budget must be positive")
     if args.max_chunks_per_doc <= 0:
         raise ValueError("max-chunks-per-doc must be positive")
+    if args.batch_size <= 0:
+        raise ValueError("batch-size must be positive")
+    if args.retry_cap < 0:
+        raise ValueError("retry-cap must be non-negative")
 
     questions = load_questions(args.questions, set(args.question_id) if args.question_id else None)
     if args.limit is not None:
@@ -84,28 +101,59 @@ async def run(args: argparse.Namespace, settings: Settings) -> list[dict[str, ob
 
     engine = build_engine(settings)
     results: list[dict[str, object]] = []
+    incremental_cache = args.cache
+    cache_handle = None
+    cached: dict[str, dict[str, object]] = {}
+    if args.cache and args.output.is_file():
+        with args.output.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    record = json.loads(line)
+                    cached[str(record["question_id"])] = record
     try:
-        retriever = BM25Retriever(
+        if incremental_cache:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            cache_handle = args.output.open("a", encoding="utf-8")
+        bm25 = BM25Retriever(
             BM25IndexManager(args.index_root),
             build_session_factory(engine),
             tenant_id=args.tenant_id,
             knowledge_base_id=args.knowledge_base_id,
         )
-        generator = GeminiGenerator(settings, model=args.model)
-        for record in questions:
-            question = str(record["question"])
-            started = time.perf_counter()
-            candidates = await retriever.retrieve(
+        retriever = bm25
+        if args.retriever == "reranked_bm25":
+            retriever = RerankedRetriever(
+                bm25,
+                CrossEncoderReranker(
+                    model_name=args.reranker_model,
+                    device=args.reranker_device,
+                    batch_size=args.reranker_batch_size,
+                    max_length=args.reranker_max_length,
+                ),
+                candidate_k=args.candidate_k,
+                preserve_tail=True,
+            )
+        generator = GeminiGenerator(settings, model=args.model, retry_cap=args.retry_cap)
+        for batch_start in range(0, len(questions), args.batch_size):
+            batch = questions[batch_start : batch_start + args.batch_size]
+            print(f"generation batch {batch_start // args.batch_size + 1}/{(len(questions) + args.batch_size - 1) // args.batch_size}", file=sys.stderr)
+            for record in batch:
+                if str(record["question_id"]) in cached:
+                    results.append(cached[str(record["question_id"])])
+                    continue
+                question = str(record["question"])
+                started = time.perf_counter()
+                candidates = await retriever.retrieve(
                 question,
                 top_k=args.top_k,
                 source_types=args.source_types,
             )
-            context = ContextBuilder(
+                context = ContextBuilder(
                 token_budget=args.token_budget,
                 max_chunks_per_doc=args.max_chunks_per_doc,
             ).build(question, candidates)
-            generated = generator.generate(GenerationRequest(query=question, context=context))
-            grounding = apply_grounding_policy(
+                generated = generator.generate(GenerationRequest(query=question, context=context))
+                grounding = apply_grounding_policy(
                 generated,
                 context,
                 policy=GroundingPolicy(
@@ -114,8 +162,8 @@ async def run(args: argparse.Namespace, settings: Settings) -> list[dict[str, ob
                     min_claim_overlap=settings.grounding_min_claim_overlap,
                 ),
             )
-            elapsed_ms = (time.perf_counter() - started) * 1000
-            results.append(
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                results.append(
                 {
                     "question_id": record["question_id"],
                     "question_type": record["question_type"],
@@ -133,15 +181,24 @@ async def run(args: argparse.Namespace, settings: Settings) -> list[dict[str, ob
                         "token_count": context.token_count,
                     },
                     "latency_ms": round(elapsed_ms, 2),
+                    "retriever": args.retriever,
+                    "candidate_k": args.candidate_k,
+                    "reranker_model": args.reranker_model if args.retriever == "reranked_bm25" else None,
                 }
             )
+                if cache_handle is not None:
+                    cache_handle.write(json.dumps(results[-1], ensure_ascii=False) + "\n")
+                    cache_handle.flush()
     finally:
+        if cache_handle is not None:
+            cache_handle.close()
         await engine.dispose()
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as handle:
-        for result in results:
-            handle.write(json.dumps(result, ensure_ascii=False) + "\n")
+    if not incremental_cache:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("w", encoding="utf-8") as handle:
+            for result in results:
+                handle.write(json.dumps(result, ensure_ascii=False) + "\n")
     return results
 
 
